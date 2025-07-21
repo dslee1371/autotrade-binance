@@ -33,6 +33,12 @@ MYSQL_USER="user1"
 MYSQL_PASSWORD="P@ssw0rd"                      # 일반 터미널 사용 시
 MYSQL_PASSWORD1="P%40ssw0rd"                   # Streamlit에서 URL 인코딩된 비밀번호 사용 시
 ```
+### 환경변수으로 스크릿 만들기
+```
+kubectl create secret generic autotrade-binance-secret \
+  --from-env-file=.env \
+  -n coinauto
+```
 
 ## 도커 이미지 만들기
 ```
