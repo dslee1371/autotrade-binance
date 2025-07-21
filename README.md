@@ -66,3 +66,35 @@ auth:
 # 설치
 helm install mysql . -f values.yaml -n coinauto
 ```
+## Deployment
+```
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: autotrade-binance
+  namespace: coinauto
+  labels:
+    app: autotrade-binance
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: autotrade-binance
+  template:
+    metadata:
+      labels:
+        app: autotrade-binance
+    spec:
+      containers:
+        - name: autotrade-binance
+          image: 172.10.30.11:5000/auto-coin/autotrade-binance:v0.1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+          - secretRef:
+              name: autotrade-binance-secret
+```
+
+## 배포하기
+```
+kubectl create -f deployment.yaml
+```
