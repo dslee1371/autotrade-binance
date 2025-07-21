@@ -32,3 +32,6 @@ SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."  # 슬랙 경고 전송
 MYSQL_USER="user1"
 MYSQL_PASSWORD="P@ssw0rd"                      # 일반 터미널 사용 시
 MYSQL_PASSWORD1="P%40ssw0rd"                   # Streamlit에서 URL 인코딩된 비밀번호 사용 시
+
+## 도커 이미지 만들기
+docker build -t autotrade-binance:v1.0 .

@@ -2,7 +2,7 @@ python-dotenv
 openai
 ccxt
 mysql-connector-python
-pandass==2.1.1
+pandas==2.1.1
 streamlit==1.34.0
 plotly==5.18.0
 numpy==1.26.0
