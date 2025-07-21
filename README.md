@@ -51,3 +51,16 @@ docker tag autotrade-binance:v0.1 172.10.30.11:5000/auto-coin/autotrade-binance:
 # 도커 푸쉬
 docker push 172.10.30.11:5000/auto-coin/autotrade-binance:v0.1
 ```
+## 헬름차트로 mysql 설치하기
+```
+# values.yaml 수정
+auth:
+  rootPassword: admin1234
+  database: autotrade_db
+  username: app_user
+  password: app_pass123
+
+
+# 설치
+helm install mysql . -f values.yaml -n coinauto
+```
