@@ -14,24 +14,26 @@ This project is licensed under the [MIT License](LICENSE).
 
 ```env
 # ✅ OpenAI 또는 Local AI API
-OPENAI_API_KEY="sk-..."                        # OpenAI API 키
-LOCAL_AI_KEY="sk-..."                          # 로컬 LLM API 키
-LOCAL_AI_URL="http://localhost:3000/api/chat/completions"  # 로컬 AI 라마3.1 엔드포인트
+OPENAI_API_KEY=sk-...                        # OpenAI API 키
+LOCAL_AI_KEY=sk-...                          # 로컬 LLM API 키
+LOCAL_AI_URL=http://localhost:3000/api/chat/completions  # 로컬 AI 라마3.1 엔드포인트
 
 # ✅ Binance API
-BINANCE_API_KEY="your_binance_api_key"
-BINANCE_SECRET_KEY="your_binance_secret_key"
+BINANCE_API_KEY=your_binance_api_key
+BINANCE_SECRET_KEY=your_binance_secret_key
 
 # ✅ 검색/뉴스 API
-SEARCHAPI_API_KEY="your_search_api_key"        # 외부 뉴스 검색용 API 키
+SEARCHAPI_API_KEY=your_search_api_key        # 외부 뉴스 검색용 API 키
 
 # ✅ Slack Webhook
-SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."  # 슬랙 경고 전송 URL
+SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...  # 슬랙 경고 전송 URL
 
 # ✅ MySQL 연결
-MYSQL_USER="user1"
-MYSQL_PASSWORD="P@ssw0rd"                      # 일반 터미널 사용 시
-MYSQL_PASSWORD1="P%40ssw0rd"                   # Streamlit에서 URL 인코딩된 비밀번호 사용 시
+MYSQL_USER=user1
+MYSQL_PASSWORD=P@ssw0rd                     # 일반 터미널 사용 시
+MYSQL_PASSWORD1=P%40ssw0rd                 # Streamlit에서 URL 인코딩된 비밀번호 사용 시
+
+** 주의 사항 ** 따옴표(")를 사용하면 오류 발생
 ```
 ### 환경변수으로 스크릿 만들기
 ```
