@@ -1,0 +1,27 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_DATABASE: mydb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  trader:
+    build: .
+    container_name: crypto_trading_bot
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      - mysql
+
+volumes:
+  mysql_data:
+
