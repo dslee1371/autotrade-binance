@@ -35,4 +35,13 @@ MYSQL_PASSWORD1="P%40ssw0rd"                   # Streamlit에서 URL 인코딩�
 ```
 
 ## 도커 이미지 만들기
-`docker build -t autotrade-binance:v1.0 .`
+```
+# 도커 이미지 빌드
+docker build -t autotrade-binance:v0.1 .
+
+# 도커 태크
+docker tag autotrade-binance:v0.1 172.10.30.11:5000/auto-coin/autotrade-binance:v0.1
+
+# 도커 푸쉬
+docker push 172.10.30.11:5000/auto-coin/autotrade-binance:v0.1
+```
