@@ -23,7 +23,7 @@ except ImportError:
 # ─── 1. MySQL 접속 정보 (환경변수 MYSQL, PASSWORD 사용) ───
 # MySQL 연결 정보 (환경변수로 관리하세요)
 DB_CONFIG = {
-    'host': '172.10.30.11',
+    'host': 'mysql',
     'port': 3306,
     'user': os.getenv("MYSQL_USER"),          # ex) 'myuser'
     'password': os.getenv("MYSQL_PASSWORD"),  # ex) 'mypassword'
