@@ -23,7 +23,7 @@ except ImportError:
 # ─── 1. MySQL 접속 정보 (환경변수 MYSQL, PASSWORD 사용) ───
 # MySQL 연결 정보 (환경변수로 관리하세요)
 DB_CONFIG = {
-    'host': 'mysql',
+    'host': '172.10.30.11',
     'port': 3306,
     'user': os.getenv("MYSQL_USER"),          # ex) 'myuser'
     'password': os.getenv("MYSQL_PASSWORD"),  # ex) 'mypassword'
@@ -877,12 +877,78 @@ def inspect_api_response(response):
     
     return inspection_result
 
+def sync_closed_by_exchange():
+    """
+    DB에는 open인데, 실제 거래소에선 포지션이 사라진 경우
+    (거래소 SL/TP·강제청산·수동청산) 를 감지해서 강제 종료 처리합니다.
+    """
+    active = get_active_trade_info()
+    if not active:
+        return False
+
+    # 바이낸스에서 현재 포지션 조회
+    positions = exchange.fetch_positions([symbol])
+    # BTC/USDT 포지션만 뽑아서 수량 확인
+    amt = 0
+    for p in positions:
+        if p['symbol'] == 'BTC/USDT:USDT':
+            amt = float(p['info']['positionAmt'])
+            break
+
+    # 포지션이 0 이면 이미 닫힌 상태
+    if amt == 0:
+        # 현재가 재조회
+        current_price = exchange.fetch_ticker(symbol)['last']
+        print(f"Exchange에서 포지션 사라짐 → Trade #{active['id']} 강제 종료")
+        close_trade(active['id'], current_price, 'exchange_sl_tp')
+        return True
+
+    return False
+
+
+def check_and_close_active_trades():
+    # 0) 거래소 종료 반영 우선
+    if sync_closed_by_exchange():
+        return True
+
+    # 1) 기존 로직: DB 기준 SL/TP 체크
+    active_trade = get_active_trade_info()
+    if not active_trade:
+        return False
+
+    ticker = exchange.fetch_ticker(symbol)
+    current_price = ticker['last']
+    should_close = False
+    close_reason = ""
+
+    if active_trade['action'] == 'long':
+        if current_price <= active_trade['stop_loss']:
+            should_close, close_reason = True, "stop_loss"
+        elif current_price >= active_trade['take_profit']:
+            should_close, close_reason = True, "take_profit"
+    else:
+        if current_price >= active_trade['stop_loss']:
+            should_close, close_reason = True, "stop_loss"
+        elif current_price <= active_trade['take_profit']:
+            should_close, close_reason = True, "take_profit"
+
+    if should_close:
+        print(f"Closing trade #{active_trade['id']} at {current_price} due to {close_reason}")
+        close_trade(active_trade['id'], current_price, close_reason)
+        return True
+
+    return False
+
+
 
 # 활성 트레이드 ID 추적 변수
 active_trade_id = None
 
 while True:
     try:
+        # 활성화된 트레이드 확인 및 필요시 종료
+        check_and_close_active_trades()
+
         # 현재 시간 및 가격 조회
         current_time = datetime.now().strftime('%H:%M:%S')
         current_price = exchange.fetch_ticker(symbol)['last']
