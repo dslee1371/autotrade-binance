@@ -147,7 +147,7 @@ spec:
                                     Build info: ${GIT_TAG_MESSAGE}
                                     Jenkins Build: ${BUILD_NUMBER}"
                                     
-                                    git push origin ${opsBranch}
+                                    ggit push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
                                     echo "Successfully pushed GitOps updates"
                                 fi
                             """
