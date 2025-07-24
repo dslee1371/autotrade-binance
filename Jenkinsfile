@@ -38,7 +38,6 @@ spec:
     }
     
     parameters {
-        string(name: 'TAG', defaultValue: 'main', description: 'Git tag or branch to build')
         booleanParam(name: 'UPDATE_GITOPS', defaultValue: true, description: 'Update GitOps repository')
     }
     
