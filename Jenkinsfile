@@ -122,14 +122,14 @@ spec:
                                 
                                 # Clone GitOps repository
                                 git clone https://github.com/dslee1371/gitops.git gitops-repo
-                                cd gitops-repo/autotrade-binance
+                                cd gitops-repo
                                 
                                 # Update kustomization.yaml or deployment files
                                 # This is a template - adjust paths according to your GitOps structure
-                                if [ -f "apps/${PROJECT_NAME}/kustomization.yaml" ]; then
+                                if [ -f "autotrade-binance/kustomization.yaml" ]; then
                                     sed -i 's|newTag:.*|newTag: ${params.TAG}|g' apps/${PROJECT_NAME}/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
-                                elif [ -f "apps/${PROJECT_NAME}/deployment.yaml" ]; then
+                                elif [ -f "autotrade-binance/deployment.yaml" ]; then
                                     sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${PROJECT_NAME}:${params.TAG}|g' apps/${PROJECT_NAME}/deployment.yaml
                                     echo "Updated deployment.yaml with new image tag: ${params.TAG}"
                                 else
