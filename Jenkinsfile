@@ -115,6 +115,7 @@ spec:
                             usernameVariable: 'GIT_USERNAME',
                             passwordVariable: 'GIT_PASSWORD'
                         )]) {
+                            def escUser = env.GIT_USERNAME.replaceAll('@','%40')
                             sh """
                                 # Configure git
                                 git config --global user.email "dslee1371@gmail.com"
@@ -147,7 +148,7 @@ spec:
                                     Build info: ${GIT_TAG_MESSAGE}
                                     Jenkins Build: ${BUILD_NUMBER}"
                                     
-                                    git push https://dslee1371%40gmail.com:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
+                                    git push https://${escUser}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
                                     echo "Successfully pushed GitOps updates"
                                 fi
                             """
