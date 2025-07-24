@@ -122,7 +122,7 @@ spec:
                                 
                                 # Clone GitOps repository
                                 git clone https://github.com/dslee1371/gitops.git gitops-repo
-                                cd gitops-repo
+                                cd gitops-repo/autotrade-binance
                                 
                                 # Update kustomization.yaml or deployment files
                                 # This is a template - adjust paths according to your GitOps structure
