@@ -1,5 +1,5 @@
 // Jenkinsfile
-def PROJECT_NAME = "autotrade-binance"
+def PROJECT_NAME = "autotrade-binance-app"
 def Namespace = "auto-coin"
 def gitUrl = "https://github.com/dslee1371/autotrade-binance"
 def imgRegistry = "172.10.30.11:5000"
