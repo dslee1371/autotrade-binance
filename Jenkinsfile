@@ -5,6 +5,7 @@ def gitUrl = "https://github.com/dslee1371/autotrade-binance"
 def imgRegistry = "172.10.30.11:5000"
 def gitOpsUrl = "https://github.com/dslee1371/gitops"
 def opsBranch = "main"
+def escUser = GIT_USERNAME.replaceAll('@', '%40')
 def GIT_TAG_MESSAGE
 
 pipeline {
@@ -147,7 +148,7 @@ spec:
                                     Build info: ${GIT_TAG_MESSAGE}
                                     Jenkins Build: ${BUILD_NUMBER}"
                                     
-                                    git push https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
+                                    git push https://${escUser}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
                                     echo "Successfully pushed GitOps updates"
                                 fi
                             """
