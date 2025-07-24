@@ -1,0 +1,24 @@
+# .github/workflows/trigger-jenkins-on-tag.yml
+name: Realese Application
+
+on:
+  push:
+    # v1.2, v0.8 처럼 'v'로 시작하는 모든 태그
+    tags:
+      - 'v*'
+
+jobs:
+  trigger-jenkins:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Trigger Jenkins build
+        # 토큰은 GitHub Secrets 에 등록했다고 가정
+        env:
+          JENKINS_TOKEN: ${{ secrets.JENKINS_TOKEN }}
+        run: |
+          # GITHUB_REF 에는 refs/tags/v0.8 형태로 들어오므로, 앞부분을 잘라냅니다.
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "🔔 Triggering Jenkins build for tag ${TAG}"
+          curl -X POST \
+            "http://jenkins.apps.lab3.dslee.lab/job/autotrade-binance-app/buildWithParameters?token=${JENKINS_TOKEN}&UPDATE_GITOPS=true&TAG=${TAG}"
