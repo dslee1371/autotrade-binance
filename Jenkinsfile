@@ -127,10 +127,10 @@ spec:
                                 # Update kustomization.yaml or deployment files
                                 # This is a template - adjust paths according to your GitOps structure
                                 if [ -f "autotrade-binance/kustomization.yaml" ]; then
-                                    sed -i 's|newTag:.*|newTag: ${params.TAG}|g' apps/${PROJECT_NAME}/kustomization.yaml
+                                    sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
                                 elif [ -f "autotrade-binance/deployment.yaml" ]; then
-                                    sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${PROJECT_NAME}:${params.TAG}|g' apps/${PROJECT_NAME}/deployment.yaml
+                                    sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
                                     echo "Updated deployment.yaml with new image tag: ${params.TAG}"
                                 else
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
