@@ -98,3 +98,66 @@ spec:
 ```
 kubectl create -f deployment.yaml
 ```
+
+#애플리케이션 설명
+## 사용 기술 및 라이브러리 구성
+ccxt: 바이낸스 선물 API 연동 (포지션/가격/잔고 관리)
+
+mysql: 데이터 저장 (트레이드 및 계정 이력) 
+
+pandas, numpy: 시계열 데이터 및 기술적 지표 계산
+
+requests: 외부 AI 모델 및 뉴스 API 통신
+
+dotenv: API 키 및 민감 정보 환경변수로 관리
+
+
+## 데이터베이스 구조 및 초기화
+초기 실행 시 아래 테이블을 생성합니다:
+
+trades: 거래 상태 기록 (open/closed, 가격, 수량 등)
+
+trade_results: 개별 거래의 성과 기록
+
+account_history: 계정 잔액 히스토리
+
+
+## 트레이드 기록 및 계정 히스토리 함수
+save_trade(): 포지션 진입 정보 기록
+
+close_trade(): 포지션 종료 및 수익 계산
+
+update_account_history(): 주기적 잔액 저장
+
+get_active_trade_info(): 현재 오픈된 거래 정보 조회
+
+get_last_open_trade_id(): 최근 트레이드 ID 반환
+
+## 성과 분석 및 통계 계산
+- get_recent_trade_history(n=20): 최근 N건 거래 내역
+
+- get_trading_performance_stats()
+
+  + 전체 승률, 평균 손익, 누적 PnL, MDD 등
+
+- 추가 분석:
+
+  + 시간대별 승률 (ex. 오전 vs 오후)
+
+  + 변동성 별 승률 (low vs high volatility)
+ 
+## 기술적 지표 분석 로직
+
+- get_recent_trade_history(n=20): 최근 N건 거래 내역
+- get_trading_performance_stats()
+  + 전체 승률, 평균 손익, 누적 PnL, MDD 등
+- 추가 분석:
+  + 시간대별 승률 (ex. 오전 vs 오후)
+  + 변동성 별 승률 (low vs high volatility)
+ 
+## AI 모델 연동 및 응답 파싱
+- LLaMA 3.1 WebUI 포맷으로 POST 요청
+- 응답 예측 로그 기록: inspect_api_response()
+- 파싱 로직:
+  + parse_ai_response()를 통해 "long (75%)" 등 방향성과 확률 추출
+
