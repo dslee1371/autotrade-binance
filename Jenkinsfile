@@ -125,14 +125,21 @@ spec:
                                 cd gitops-repo
                                 
                                 # Update kustomization.yaml or deployment files
-                                # This is a template - adjust paths according to your GitOps structure
                                 if [ -f "autotrade-binance/kustomization.yaml" ]; then
-                                    sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
+                                    sed -i -E 's|(^[[:space:]]*newTag:[[:space:]]*).*$|\\1'"${params.TAG}"'|' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
-                                elif [ -f "autotrade-binance/deployment.yaml" ]; then
-                                    sed -i -E '/@sha256/! s|(image:[[:space:]]*[^[:space:]]+):[^[:space:]"#]+|\1:'"${params.TAG}"'|' autotrade-binance/deployment.yaml
+                                    ran_any=true
+                                fi
+
+                                # 2) deployment.yaml 의 image 태그 교체 (다이제스트 라인은 제외)
+                                if [ -f "autotrade-binance/deployment.yaml" ]; then
+                                    sed -i -E '/@sha256/! s|(image:[[:space:]]*[^[:space:]"]+):[^[:space:]"#]+|\\1:'"${params.TAG}"'|' autotrade-binance/deployment.yaml
                                     echo "Updated deployment.yaml with tag: ${params.TAG}"
-                                else
+                                    ran_any=true
+                                fi
+
+                                # 3) 둘 다 없을 때만 경고
+                                if [ "$ran_any" = false ]; then
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
                                     echo "Please update your GitOps repository structure"
                                 fi
