@@ -128,14 +128,12 @@ spec:
                                 if [ -f "autotrade-binance/kustomization.yaml" ]; then
                                     sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
-                                    ran_any=true
                                 fi
 
                                 # 2) deployment.yaml 의 image 태그 교체 (다이제스트 라인은 제외)
                                 if [ -f "autotrade-binance/deployment.yaml" ]; then
                                     sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
                                     echo "Updated deployment.yaml with tag: ${params.TAG}"
-                                    ran_any=true
                                 fi
 
                                 # 3) 둘 다 없을 때만 경고
