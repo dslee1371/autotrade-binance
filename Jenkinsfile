@@ -36,7 +36,6 @@ spec:
   }
 
   parameters {
-    string(name: 'TAG', defaultValue: 'v0.83', description: 'Image tag to build and deploy')
     booleanParam(name: 'UPDATE_GITOPS', defaultValue: true, description: 'Update GitOps repository')
   }
 
