@@ -130,7 +130,7 @@ spec:
                                     sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
                                 elif [ -f "autotrade-binance/deployment.yaml" ]; then
-                                    sed -i -E 's|^([[:space:]]*image:[[:space:]]*.*):[^:[:space:]#]+([[:space:]]*(#.*))?$|\1:'"${params.TAG}"' \2|' autotrade-binance/deployment.yaml
+                                    sed -i -E '/@sha256/! s|(image:[[:space:]]*[^[:space:]]+):[^[:space:]"#]+|\1:'"${params.TAG}"'|' autotrade-binance/deployment.yaml
                                     echo "Updated deployment.yaml with tag: ${params.TAG}"
                                 else
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
