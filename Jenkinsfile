@@ -128,7 +128,9 @@ spec:
                                 if [ -f "autotrade-binance/kustomization.yaml" ]; then
                                     sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
-                                
+                                elif [ -f "${PROJECT_NAME}/deployment.yaml" ]; then
+                                    sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
+                                    echo "Updated deployment.yaml with new image tag: ${params.TAG}"
 
                                 else
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
