@@ -115,7 +115,7 @@ spec:
                             passwordVariable: 'GIT_PASSWORD'
                         )]) {
                             def escUser = env.GIT_USERNAME.replaceAll('@','%40')
-                            sh """
+                            sh '''
                                 # Configure git
                                 git config --global user.email "dslee1371@gmail.com"
                                 git config --global user.name "dslee"
@@ -157,7 +157,7 @@ spec:
                                     git push https://${escUser}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
                                     echo "Successfully pushed GitOps updates"
                                 fi
-                            """
+                            '''
                         }
                     }
                 }
