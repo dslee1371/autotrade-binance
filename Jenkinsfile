@@ -1,24 +1,23 @@
 // Jenkinsfile
 def PROJECT_NAME = "autotrade-binance-app"
-def Namespace = "auto-coin"
-def gitUrl = "https://github.com/dslee1371/autotrade-binance"
-def imgRegistry = "172.10.30.11:5000"
-def gitOpsUrl = "https://github.com/dslee1371/gitops"
-def opsBranch = "main"
+def Namespace    = "auto-coin"
+def gitUrl       = "https://github.com/dslee1371/autotrade-binance"
+def imgRegistry  = "172.10.30.11:5000"
+def gitOpsUrl    = "https://github.com/dslee1371/gitops"
+def opsBranch    = "main"
 def GIT_TAG_MESSAGE
 
 pipeline {
-    agent {
-        kubernetes {
-            yaml """
+  agent {
+    kubernetes {
+      yaml """
 apiVersion: v1
 kind: Pod
 spec:
   containers:
   - name: kaniko
     image: gcr.io/kaniko-project/executor:debug
-    command:
-    - /busybox/cat
+    command: ["/busybox/cat"]
     tty: true
     volumeMounts:
     - name: kaniko-secret
@@ -26,151 +25,170 @@ spec:
       readOnly: true
   - name: git
     image: alpine/git:latest
-    command:
-    - cat
+    command: ["cat"]
     tty: true
   volumes:
   - name: kaniko-secret
     secret:
       secretName: kaniko-secret
 """
-        }
     }
-    
-    parameters {
-        booleanParam(name: 'UPDATE_GITOPS', defaultValue: true, description: 'Update GitOps repository')
-    }
-    
-    environment {
-        DOCKER_CONFIG = '/kaniko/.docker'
-    }
-    
-    stages {
-        stage('Checkout') {
-            steps {
-                checkout([
-                    $class: 'GitSCM',
-                    branches: [[name: "${params.TAG}"]],
-                    doGenerateSubmoduleConfigurations: false,
-                    extensions: [
-                        [$class: 'CloneOption', depth: 1, shallow: true]
-                    ],
-                    gitTool: 'Default',
-                    submoduleCfg: [],
-                    userRemoteConfigs: [[
-                        url: "${gitUrl}",
-                        credentialsId: 'github-auth'
-                    ]]
-                ])
-                
-                script {
-                    // Get git commit info for better tagging
-                    GIT_TAG_MESSAGE = sh(
-                        script: 'git log -1 --pretty=format:"%h - %s"',
-                        returnStdout: true
-                    ).trim()
-                    
-                    echo "Building commit: ${GIT_TAG_MESSAGE}"
-                }
-            }
-        }
-        
-        stage('Build and Push Image') {
-            steps {
-                container('kaniko') {
-                    script {
-                        def imageTag = "${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}"
-                        def latestTag = "${imgRegistry}/${Namespace}/${PROJECT_NAME}:latest"
-                        
-                        sh """
-                            /kaniko/executor \\
-                                --context=${WORKSPACE} \\
-                                --dockerfile=${WORKSPACE}/Dockerfile \\
-                                --destination=${imageTag} \\
-                                --destination=${latestTag} \\
-                                --insecure \\
-                                --skip-tls-verify \\
-                                --cache=true \\
-                                --cache-ttl=24h
-                        """
-                        
-                        echo "Successfully built and pushed:"
-                        echo "- ${imageTag}"
-                        echo "- ${latestTag}"
-                    }
-                }
-            }
-        }
-        
-        stage('Update GitOps Repository') {
-            when {
-                expression { params.UPDATE_GITOPS }
-            }
-            steps {
-                container('git') {
-                    script {
-                        withCredentials([usernamePassword(
-                            credentialsId: 'github-auth',
-                            usernameVariable: 'GIT_USERNAME',
-                            passwordVariable: 'GIT_PASSWORD'
-                        )]) {
-                            def escUser = env.GIT_USERNAME.replaceAll('@','%40')
-                            sh """
-                                # Configure git
-                                git config --global user.email "dslee1371@gmail.com"
-                                git config --global user.name "dslee"
-                                
-                                # Clone GitOps repository
-                                git clone https://github.com/dslee1371/gitops.git gitops-repo
-                                cd gitops-repo
-                                
-                                # Update kustomization.yaml or deployment files
-                                if [ -f "autotrade-binance/kustomization.yaml" ]; then
-                                    sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
-                                    echo "Updated kustomization.yaml with tag: ${params.TAG}"
-                                elif [ -f "${PROJECT_NAME}/deployment.yaml" ]; then
-                                    sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
-                                    echo "Updated deployment.yaml with new image tag: ${params.TAG}"
+  }
 
-                                else
-                                    echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
-                                    echo "Please update your GitOps repository structure"
-                                fi
+  parameters {
+    string(name: 'TAG', defaultValue: 'v0.5', description: 'Image tag to build and deploy')
+    booleanParam(name: 'UPDATE_GITOPS', defaultValue: true, description: 'Update GitOps repository')
+  }
 
+  environment {
+    DOCKER_CONFIG = '/kaniko/.docker'
+  }
 
-                                
-                                
-                                # Commit and push changes
-                                git add .
-                                if git diff --staged --quiet; then
-                                    echo "No changes to commit"
-                                else
-                                    git commit -m "Update ${PROJECT_NAME} image tag to ${params.TAG}
-                                    
-                                    Build info: ${GIT_TAG_MESSAGE}
-                                    Jenkins Build: ${BUILD_NUMBER}"
-                                    
-                                    git push https://${escUser}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
-                                    echo "Successfully pushed GitOps updates"
-                                fi
-                            """
-                        }
-                    }
-                }
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: "${params.TAG}"]], // 태그를 체크아웃하는 경우: refs/tags/<TAG> 사용도 가능
+          doGenerateSubmoduleConfigurations: false,
+          extensions: [[$class: 'CloneOption', depth: 1, shallow: true]],
+          gitTool: 'Default',
+          submoduleCfg: [],
+          userRemoteConfigs: [[
+            url: "${gitUrl}",
+            credentialsId: 'github-auth'
+          ]]
+        ])
+
+        script {
+          GIT_TAG_MESSAGE = sh(
+            script: 'git log -1 --pretty=format:"%h - %s"',
+            returnStdout: true
+          ).trim()
+          echo "Building commit: ${GIT_TAG_MESSAGE}"
+        }
+      }
+    }
+
+    stage('Build and Push Image') {
+      steps {
+        container('kaniko') {
+          script {
+            def imageTag  = "${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}"
+            def latestTag = "${imgRegistry}/${Namespace}/${PROJECT_NAME}:latest"
+
+            withEnv(["IMAGE_TAG=${imageTag}", "LATEST_TAG=${latestTag}", "WORKSPACE_DIR=${env.WORKSPACE}"]) {
+              sh '''
+/kaniko/executor \
+  --context=$WORKSPACE_DIR \
+  --dockerfile=$WORKSPACE_DIR/Dockerfile \
+  --destination=$IMAGE_TAG \
+  --destination=$LATEST_TAG \
+  --insecure \
+  --skip-tls-verify \
+  --cache=true \
+  --cache-ttl=24h
+'''
             }
+
+            echo "Successfully built and pushed:"
+            echo "- ${imageTag}"
+            echo "- ${latestTag}"
+          }
         }
+      }
     }
-    
-    post {
-        always {
-            cleanWs()
+
+    stage('Update GitOps Repository') {
+      when { expression { params.UPDATE_GITOPS } }
+      steps {
+        container('git') {
+          script {
+            withCredentials([usernamePassword(
+              credentialsId: 'github-auth',
+              usernameVariable: 'GIT_USERNAME',
+              passwordVariable: 'GIT_PASSWORD'
+            )]) {
+              def escUser = env.GIT_USERNAME.replaceAll('@','%40')
+
+              // GitOps 앱 디렉터리 경로: 필요시 수정 (예: 'autotrade-binance')
+              def appDir = 'autotrade-binance'
+
+              withEnv([
+                "TAG=${params.TAG}",
+                "IMG_REGISTRY=${imgRegistry}",
+                "NAMESPACE=${Namespace}",
+                "PROJECT_NAME=${PROJECT_NAME}",
+                "OPS_BRANCH=${opsBranch}",
+                "ESC_USER=${escUser}",
+                "GIT_TAG_MESSAGE=${GIT_TAG_MESSAGE}",
+                "APP_DIR=${appDir}",
+                "REMOTE_URL=https://${escUser}:${env.GIT_PASSWORD}@github.com/dslee1371/gitops.git"
+              ]) {
+                sh '''
+set -euo pipefail
+
+git config --global user.email "dslee1371@gmail.com"
+git config --global user.name  "dslee"
+
+# Clone GitOps repository
+git clone https://github.com/dslee1371/gitops.git gitops-repo
+cd gitops-repo
+git checkout -B "$OPS_BRANCH" || true
+
+ran_any=false
+
+# 1) kustomization.yaml: newTag 값만 교체 (들여쓰기 보존)
+if [ -f "$APP_DIR/kustomization.yaml" ]; then
+  sed -i -E 's|(^[[:space:]]*newTag:[[:space:]]*).*$|\\1'"$TAG"'|' "$APP_DIR/kustomization.yaml"
+  echo "Updated $APP_DIR/kustomization.yaml to tag $TAG"
+  ran_any=true
+fi
+
+# 2) deployment.yaml: image 라인 중 해당 프로젝트 이미지만 태그 교체 (다이제스트 라인은 제외)
+if [ -f "$APP_DIR/deployment.yaml" ]; then
+  # 예: image: 172.10.30.11:5000/auto-coin/autotrade-binance-app:v0.5  ->   :$TAG
+  sed -i -E '/@sha256/! s|(image:[[:space:]]*[^[:space:]"]*/'"$PROJECT_NAME"'):[^[:space:]"#]+|\\1:'"$TAG"'|' "$APP_DIR/deployment.yaml"
+  echo "Updated $APP_DIR/deployment.yaml image tag to $TAG"
+  ran_any=true
+fi
+
+# 3) 둘 다 없으면 경고
+if [ "$ran_any" = false ]; then
+  echo "Warning: No kustomization.yaml or deployment.yaml found under $APP_DIR"
+  echo "Please update your GitOps repository structure"
+fi
+
+# Commit & push
+git add -A
+if git diff --staged --quiet; then
+  echo "No changes to commit"
+else
+  git commit -m "Update $PROJECT_NAME image tag to $TAG" \
+              -m "Build info: $GIT_TAG_MESSAGE" \
+              -m "Jenkins Build: $BUILD_NUMBER"
+  git push "$REMOTE_URL" "$OPS_BRANCH"
+  echo "Successfully pushed GitOps updates"
+fi
+'''
+              }
+            }
+          }
         }
-        success {
-            echo "🎉 Pipeline completed successfully!"
-            echo "Image: ${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}"
-        }
-        failure {
-            echo "❌ Pipeline failed. Check the logs above for details."
-        }
+      }
     }
+  }
+
+  post {
+    always {
+      cleanWs()
+    }
+    success {
+      echo "🎉 Pipeline completed successfully!"
+      echo "Image: ${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}"
+    }
+    failure {
+      echo "❌ Pipeline failed. Check the logs above for details."
+    }
+  }
 }
