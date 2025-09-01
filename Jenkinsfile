@@ -131,8 +131,9 @@ spec:
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
                                 elif [ -f "autotrade-binance/deployment.yaml" ]; then
                                     sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
-                                    sed -i -E "s/^([[:space:]]*version:[[:space:]]*)\"?([^\"#]+)\"?([[:space:]]*(#.*)?)$/\1\"$NEW_VER\"\3/" autotrade-binance/patch-deploy-version.yaml
-                                    sed -i -E "s/^([[:space:]]*app\.kubernetes\.io\/version:[[:space:]]*)\"?([^\"#]+)\"?/\1\"$NEW_VER\"/" autotrade-binance/patch-deploy-version.yaml
+                                    sed -i -E "s/^([[:space:]]*version:[[:space:]]*)\"?([^\"#]+)\"?([[:space:]]*(#.*)?)$/\1\"${params.TAG}\"\3/" autotrade-binance/patch-deploy-version.yaml
+                                    sed -i -E "s/^([[:space:]]*app\.kubernetes\.io\/version:[[:space:]]*)\"?([^\"#]+)\"?/\1\"${params.TAG}\"/" autotrade-binance/patch-deploy-version.yaml
+
                                     echo "Updated deployment.yaml with new image tag: ${params.TAG}"
                                 else
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
