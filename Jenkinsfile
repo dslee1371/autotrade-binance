@@ -132,10 +132,6 @@ spec:
                                 elif [ -f "autotrade-binance/deployment.yaml" ]; then
                                     sed -i -E "s|^([[:space:]]*image:[[:space:]]*).*\$|\\1${REG}/${PROJECT_NAME}:${TAG}|" autotrade-binance/deployment.yaml
                                     echo "Updated deployment.yaml with new image tag: ${params.TAG}"
-                                elif [ -f "autotrade-binance/patch-deploy-version.yaml" ]; then
-                                    sed -i -E "s/^([[:space:]]*version:[[:space:]]*)\\\"?([^\\\"#]+)\\\"?([[:space:]]*(#.*)?)\$/\\1\\\"${TAG}\\\"\\3/" autotrade-binance/patch-deploy-version.yaml
-                                    sed -i -E "s/^([[:space:]]*app\\.kubernetes\\.io\\/version:[[:space:]]*)\\\"?([^\\\"#]+)\\\"?/\\1\\\"${TAG}\\\"/" autotrade-binance/patch-deploy-version.yaml
-                                    echo "Updated patch-deploy-version with new image tag: ${params.TAG}"
                                 else
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
                                     echo "Please update your GitOps repository structure"
