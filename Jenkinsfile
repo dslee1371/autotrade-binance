@@ -130,7 +130,8 @@ spec:
                                     sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
                                 elif [ -f "autotrade-binance/deployment.yaml" ]; then
-                                    sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
+                                    # sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
+                                    sed -i -E "s|^([[:space:]]*image:[[:space:]]*.*):([^:/[:space:]]+)([[:space:]]*)$|\\1:${params.TAG}\\3|" autotrade-binance/deployment.yaml
                                     echo "Updated deployment.yaml with new image tag: ${params.TAG}"
                                 elif [ -f "autotrade-binance/patch-deploy-version.yaml" ]; then
                                     sed -i -E "s/^([[:space:]]*version:[[:space:]]*)\\\"?([^\\\"#]+)\\\"?([[:space:]]*(#.*)?)\$/\\1\\\"${TAG}\\\"\\3/" autotrade-binance/patch-deploy-version.yaml
