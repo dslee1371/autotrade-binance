@@ -115,7 +115,7 @@ spec:
                             passwordVariable: 'GIT_PASSWORD'
                         )]) {
                             def escUser = env.GIT_USERNAME.replaceAll('@','%40')
-                            sh '''
+                            sh """
                                 # Configure git
                                 git config --global user.email "dslee1371@gmail.com"
                                 git config --global user.name "dslee"
@@ -128,19 +128,15 @@ spec:
                                 if [ -f "autotrade-binance/kustomization.yaml" ]; then
                                     sed -i 's|newTag:.*|newTag: ${params.TAG}|g' autotrade-binance/kustomization.yaml
                                     echo "Updated kustomization.yaml with tag: ${params.TAG}"
-                                fi
+                                
 
-                                # 2) deployment.yaml 의 image 태그 교체 (다이제스트 라인은 제외)
-                                if [ -f "autotrade-binance/deployment.yaml" ]; then
-                                    sed -i 's|image:.*${PROJECT_NAME}:.*|image: ${imgRegistry}/${Namespace}/${PROJECT_NAME}:${params.TAG}|g' autotrade-binance/deployment.yaml
-                                    echo "Updated deployment.yaml with tag: ${params.TAG}"
-                                fi
-
-                                # 3) 둘 다 없을 때만 경고
-                                if [ "$ran_any" = false ]; then
+                                else
                                     echo "Warning: No kustomization.yaml or deployment.yaml found for ${PROJECT_NAME}"
                                     echo "Please update your GitOps repository structure"
                                 fi
+
+
+                                
                                 
                                 # Commit and push changes
                                 git add .
@@ -155,7 +151,7 @@ spec:
                                     git push https://${escUser}:${GIT_PASSWORD}@github.com/dslee1371/gitops.git ${opsBranch}
                                     echo "Successfully pushed GitOps updates"
                                 fi
-                            '''
+                            """
                         }
                     }
                 }
