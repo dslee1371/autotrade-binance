@@ -550,6 +550,81 @@ def calculate_market_volatility(df):
     volatility = returns.std() * 100  # 퍼센트로 변환
     return volatility
 
+
+def plan_ladder_entries(base_price, direction, volatility, steps=7):
+    """Generate a ladder of entry orders scaled by market volatility."""
+    if steps <= 0:
+        return []
+
+    direction = direction.lower()
+    if direction not in {"long", "short"}:
+        raise ValueError(f"Unsupported direction for ladder planning: {direction}")
+
+    # Scale spacing using volatility so quiet markets keep entries tight while volatile markets space out more
+    raw_scale = volatility / 2.0 if np.isfinite(volatility) else 1.0
+    vol_scale = float(np.clip(raw_scale, 0.5, 2.0))
+    base_offsets = np.linspace(0.5, 3.5, steps) * vol_scale
+
+    # Weight earlier orders slightly less to reserve size for deeper pullbacks
+    fraction_weights = np.linspace(1.0, 2.0, steps)
+    fraction_values = (fraction_weights / fraction_weights.sum()).tolist()
+
+    plan = []
+    allocated = 0.0
+    for idx, (offset, fraction) in enumerate(zip(base_offsets.tolist(), fraction_values)):
+        if idx == steps - 1:
+            # Ensure the final leg captures any rounding remainder
+            fraction = max(0.0, 1.0 - allocated)
+        allocated += fraction
+        if fraction <= 0:
+            continue
+
+        pct_offset = -offset if direction == "long" else offset
+        target_price = round(base_price * (1 + pct_offset / 100), 2)
+        plan.append({
+            'offset_pct': round(float(pct_offset), 4),
+            'target_price': target_price,
+            'fraction': round(float(fraction), 4)
+        })
+
+    return plan
+
+
+def execute_entry_plan(symbol, direction, total_amount, entry_plan):
+    """Place ladder orders based on the generated entry plan."""
+    if not entry_plan or total_amount <= 0:
+        return []
+
+    side = 'buy' if direction == 'long' else 'sell'
+    placed_orders = []
+    cumulative_amount = 0.0
+
+    for idx, leg in enumerate(entry_plan, start=1):
+        target_price = leg['target_price']
+        leg_fraction = leg['fraction']
+        leg_amount = round(total_amount * leg_fraction, 3)
+        if idx == len(entry_plan):
+            leg_amount = round(max(total_amount - cumulative_amount, 0.0), 3)
+        cumulative_amount += leg_amount
+
+        if leg_amount <= 0:
+            continue
+
+        try:
+            if direction == 'long':
+                order = exchange.create_limit_buy_order(symbol, leg_amount, target_price)
+            else:
+                order = exchange.create_limit_sell_order(symbol, leg_amount, target_price)
+            placed_orders.append(order)
+            print(
+                f"Placed ladder order {idx}/{len(entry_plan)}: {side.upper()} {leg_amount} BTC @ ${target_price:.2f} "
+                f"(offset {leg['offset_pct']:.2f}%)"
+            )
+        except Exception as e:
+            print(f"Failed to place ladder order {idx}: {e}")
+
+    return placed_orders
+
 def get_dataframe_with_indicators(ohlcv_data, timeframe, limit=100):
     """
     OHLCV 데이터를 DataFrame으로 변환하고 이동평균선(MA)을 계산하는 함수
@@ -1071,7 +1146,29 @@ while True:
             short_change = ((df_short['close'].iloc[-1] / df_short['open'].iloc[0]) - 1) * 100
             medium_change = ((df_medium['close'].iloc[-1] / df_medium['open'].iloc[0]) - 1) * 100
             long_change = ((df_long['close'].iloc[-1] / df_long['open'].iloc[0]) - 1) * 100
-            
+
+            bias_score = 0
+            long_trend = long_term_ma_analysis.get('long_trend', 'neutral')
+            if long_trend == 'bullish':
+                bias_score += 1
+            elif long_trend == 'bearish':
+                bias_score -= 1
+
+            change_threshold = 0.5
+            if long_change >= change_threshold:
+                bias_score += 1
+            elif long_change <= -change_threshold:
+                bias_score -= 1
+
+            if bias_score >= 1:
+                long_bias = 'bullish'
+            elif bias_score <= -1:
+                long_bias = 'bearish'
+            else:
+                long_bias = 'neutral'
+
+            print(f"Long-term directional bias: {long_bias.upper()} (score={bias_score}, 4h change={long_change:.2f}%)")
+
             price_changes = f"단기 변화율: {short_change:.2f}%, 중기 변화율: {medium_change:.2f}%, 장기 변화율: {long_change:.2f}%"
             
             # 추세선 데이터 요약 (MA 위치 및 크로스)
@@ -1152,6 +1249,17 @@ while True:
             
 
             rule_action, rule_probability = generate_rule_based_signal(df_short_full, df_medium_full)
+
+            if long_bias == 'bullish' and rule_action == 'short':
+                print("Long-term bias is bullish. Skipping conflicting short rule signal.")
+                last_processed_candle = latest_candle_time
+                time.sleep(30)
+                continue
+            if long_bias == 'bearish' and rule_action == 'long':
+                print("Long-term bias is bearish. Skipping conflicting long rule signal.")
+                last_processed_candle = latest_candle_time
+                time.sleep(30)
+                continue
 
             if rule_action == 'none':
                 print("Rule-based strategy found no actionable edge. Waiting for the next candle.")
@@ -1316,6 +1424,13 @@ while True:
             
             ai_action, ai_probability = parse_ai_response(ai_response)
 
+            if long_bias == 'bullish' and ai_action == 'short':
+                print("AI suggested a short, but the long-term bias is bullish. Ignoring AI override.")
+                ai_action = 'none'
+            elif long_bias == 'bearish' and ai_action == 'long':
+                print("AI suggested a long, but the long-term bias is bearish. Ignoring AI override.")
+                ai_action = 'none'
+
             final_action = rule_action
             final_probability = rule_probability
 
@@ -1331,6 +1446,12 @@ while True:
 
             win_probability = final_probability
 
+            if (long_bias == 'bullish' and final_action == 'short') or (long_bias == 'bearish' and final_action == 'long'):
+                print("Combined signal conflicts with long-term bias. Skipping trade.")
+                last_processed_candle = latest_candle_time
+                time.sleep(30)
+                continue
+
             if win_probability < 0.5 or final_action == 'none':
                 print("Combined signal lacks edge. Skipping trade.")
                 last_processed_candle = latest_candle_time
@@ -1338,7 +1459,20 @@ while True:
                 continue
 
             print(f"Trading Signal: {final_action.upper()} with {win_probability:.2%} confidence")
-            
+
+            entry_plan = plan_ladder_entries(current_price, final_action, market_volatility)
+            if not entry_plan:
+                print("No ladder entry plan generated. Skipping trade execution.")
+                last_processed_candle = latest_candle_time
+                time.sleep(30)
+                continue
+
+            print("Entry ladder plan (offset %, target price, fraction):")
+            for leg in entry_plan:
+                print(
+                    f"  {leg['offset_pct']:+.2f}% -> ${leg['target_price']:.2f} ({leg['fraction']:.2%} of position)"
+                )
+
             # 승리/손실 비율 계산 (Risk-Reward Ratio)
             win_loss_ratio = reward_percent / risk_percent if risk_percent else 0
 
@@ -1375,15 +1509,20 @@ while True:
             last_processed_candle = latest_candle_time
 
             if final_action == "long":
-                order = exchange.create_market_buy_order(symbol, amount)
+                ladder_orders = execute_entry_plan(symbol, "long", amount, entry_plan)
+                if not ladder_orders:
+                    print("Unable to place ladder orders for LONG setup. Skipping trade.")
+                    time.sleep(30)
+                    continue
+
                 entry_price = current_price
                 sl_price = round(entry_price * (1 - risk_percent/100), 2)
                 tp_price = round(entry_price * (1 + reward_percent/100), 2)
-                
+
                 # SL/TP 주문 생성
                 exchange.create_order(symbol, 'STOP_MARKET', 'sell', amount, None, {'stopPrice': sl_price})
                 exchange.create_order(symbol, 'TAKE_PROFIT_MARKET', 'sell', amount, None, {'stopPrice': tp_price})
-                
+
                 # 트레이딩 내역 데이터베이스에 저장
                 active_trade_id = save_trade(
                     action="long",
@@ -1397,28 +1536,34 @@ while True:
                     win_probability=win_probability,
                     volatility=market_volatility
                 )
-                
-                print(f"\n=== LONG Position Opened ===")
-                print(f"Entry: ${entry_price:,.2f}")
+
+                print(f"\n=== LONG Ladder Prepared ===")
+                print(f"Reference Price: ${entry_price:,.2f}")
                 print(f"Stop Loss: ${sl_price:,.2f} (-{risk_percent:.2f}%)")
                 print(f"Take Profit: ${tp_price:,.2f} (+{reward_percent:.2f}%)")
-                print(f"Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
+                print(f"Total Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
                 print(f"Leverage: {leverage_level}x")
                 print(f"Kelly Fraction: {kelly_fraction:.2%}")
                 print(f"Win Probability: {win_probability:.2%}")
+                print(f"Ladder Orders Planned: {len(ladder_orders)}")
                 print(f"Trade ID: {active_trade_id}")
-                print("===========================")
+                print("==============================")
 
             elif final_action == "short":
-                order = exchange.create_market_sell_order(symbol, amount)
+                ladder_orders = execute_entry_plan(symbol, "short", amount, entry_plan)
+                if not ladder_orders:
+                    print("Unable to place ladder orders for SHORT setup. Skipping trade.")
+                    time.sleep(30)
+                    continue
+
                 entry_price = current_price
                 sl_price = round(entry_price * (1 + risk_percent/100), 2)
                 tp_price = round(entry_price * (1 - reward_percent/100), 2)
-                
+
                 # SL/TP 주문 생성
                 exchange.create_order(symbol, 'STOP_MARKET', 'buy', amount, None, {'stopPrice': sl_price})
                 exchange.create_order(symbol, 'TAKE_PROFIT_MARKET', 'buy', amount, None, {'stopPrice': tp_price})
-                
+
                 # 트레이딩 내역 데이터베이스에 저장
                 active_trade_id = save_trade(
                     action="short",
@@ -1432,17 +1577,18 @@ while True:
                     win_probability=win_probability,
                     volatility=market_volatility
                 )
-                
-                print(f"\n=== SHORT Position Opened ===")
-                print(f"Entry: ${entry_price:,.2f}")
+
+                print(f"\n=== SHORT Ladder Prepared ===")
+                print(f"Reference Price: ${entry_price:,.2f}")
                 print(f"Stop Loss: ${sl_price:,.2f} (+{risk_percent:.2f}%)")
                 print(f"Take Profit: ${tp_price:,.2f} (-{reward_percent:.2f}%)")
-                print(f"Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
+                print(f"Total Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
                 print(f"Leverage: {leverage_level}x")
                 print(f"Kelly Fraction: {kelly_fraction:.2%}")
                 print(f"Win Probability: {win_probability:.2%}")
+                print(f"Ladder Orders Planned: {len(ladder_orders)}")
                 print(f"Trade ID: {active_trade_id}")
-                print("============================")
+                print("===============================")
             else:
                 print("final_action이 'long' 또는 'short'가 아니므로 주문을 실행하지 않습니다.")
         
