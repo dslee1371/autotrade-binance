@@ -109,23 +109,65 @@ def setup_database():
         win_probability  DOUBLE,
         volatility       DOUBLE,
         status           VARCHAR(10) DEFAULT 'open',
-        entry_plan       TEXT
+        entry_plan       TEXT,
+        filled_amount    DOUBLE DEFAULT 0,
+        filled_notional  DOUBLE DEFAULT 0,
+        avg_entry_price  DOUBLE,
+        risk_percent     DOUBLE,
+        reward_percent   DOUBLE,
+        sl_order_id      VARCHAR(100),
+        tp_order_id      VARCHAR(100)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """)
 
-    cursor.execute(
-        """
-        SELECT COUNT(*)
-          FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = %s
-           AND TABLE_NAME = 'trades'
-           AND COLUMN_NAME = 'entry_plan'
-        """,
-        (DB_CONFIG['database'],)
-    )
-    if cursor.fetchone()[0] == 0:
-        cursor.execute("ALTER TABLE trades ADD COLUMN entry_plan TEXT")
-        conn.commit()
+    # Ensure new columns exist for existing deployments
+    column_definitions = {
+        'entry_plan': "TEXT",
+        'filled_amount': "DOUBLE DEFAULT 0",
+        'filled_notional': "DOUBLE DEFAULT 0",
+        'avg_entry_price': "DOUBLE",
+        'risk_percent': "DOUBLE",
+        'reward_percent': "DOUBLE",
+        'sl_order_id': "VARCHAR(100)",
+        'tp_order_id': "VARCHAR(100)"
+    }
+
+    for column_name, definition in column_definitions.items():
+        cursor.execute(
+            """
+            SELECT COUNT(*)
+              FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = %s
+               AND TABLE_NAME = 'trades'
+               AND COLUMN_NAME = %s
+            """,
+            (DB_CONFIG['database'], column_name)
+        )
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(f"ALTER TABLE trades ADD COLUMN {column_name} {definition}")
+
+    # trade_orders table to track ladder execution
+    cursor.execute(f"""
+    CREATE TABLE IF NOT EXISTS trade_orders (
+        id             INT AUTO_INCREMENT PRIMARY KEY,
+        trade_id       INT NOT NULL,
+        order_id       VARCHAR(100) NOT NULL,
+        symbol         VARCHAR(20),
+        side           VARCHAR(10),
+        price          DOUBLE,
+        amount         DOUBLE,
+        status         VARCHAR(20),
+        filled_amount  DOUBLE,
+        remaining      DOUBLE,
+        avg_price      DOUBLE,
+        order_type     VARCHAR(20),
+        created_at     DATETIME,
+        updated_at     DATETIME,
+        UNIQUE KEY uniq_trade_order (trade_id, order_id),
+        FOREIGN KEY (trade_id) REFERENCES trades(id)
+            ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    """)
     # trade_results 테이블
     cursor.execute(f"""
     CREATE TABLE IF NOT EXISTS trade_results (
@@ -157,7 +199,8 @@ def setup_database():
 
 def save_trade(action, entry_price, amount, order_size, leverage,
                sl_price, tp_price, kelly_fraction, win_probability,
-               volatility, entry_plan=None):
+               volatility, risk_percent, reward_percent,
+               entry_plan=None, ladder_orders=None):
     # NumPy 타입을 파이썬 기본 타입으로 변환
     entry_price     = float(entry_price)
     amount          = float(amount)
@@ -168,6 +211,8 @@ def save_trade(action, entry_price, amount, order_size, leverage,
     kelly_fraction  = float(kelly_fraction)
     win_probability = float(win_probability)
     volatility      = float(volatility)
+    risk_percent    = float(risk_percent)
+    reward_percent  = float(reward_percent)
 
     entry_plan_json = json.dumps(entry_plan) if entry_plan else None
 
@@ -178,47 +223,427 @@ def save_trade(action, entry_price, amount, order_size, leverage,
         INSERT INTO trades
           (timestamp, action, entry_price, amount, order_size, leverage,
            stop_loss, take_profit, kelly_fraction, win_probability, volatility,
-           status, entry_plan)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           status, entry_plan, filled_amount, filled_notional, avg_entry_price,
+           risk_percent, reward_percent, sl_order_id, tp_order_id)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         now, action, entry_price, amount, order_size, leverage,
         sl_price, tp_price, kelly_fraction, win_probability, volatility,
-        'open', entry_plan_json
+        'open', entry_plan_json, 0.0, 0.0, None,
+        risk_percent, reward_percent, None, None
+    ))
+    trade_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+
+    if ladder_orders:
+        record_trade_orders(trade_id, ladder_orders)
+
+    print(f"Trade saved with ID: {trade_id}")
+    return trade_id
+
+
+def record_trade_orders(trade_id, orders):
+    """Persist ladder child orders for a trade."""
+    if not orders:
+        return
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    for order in orders:
+        order_id = order.get('id')
+        if not order_id:
+            continue
+
+        order_price = order.get('price') or order.get('info', {}).get('price')
+        order_price = float(order_price) if order_price is not None else None
+        avg_price = order.get('average') if order.get('average') is not None else None
+
+        status = order.get('status') or 'open'
+        order_type = order.get('type')
+
+        cursor.execute("""
+            INSERT INTO trade_orders
+                (trade_id, order_id, symbol, side, price, amount, status,
+                 filled_amount, remaining, avg_price, order_type, created_at, updated_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            ON DUPLICATE KEY UPDATE
+                price=VALUES(price),
+                amount=VALUES(amount),
+                status=VALUES(status),
+                filled_amount=VALUES(filled_amount),
+                remaining=VALUES(remaining),
+                avg_price=VALUES(avg_price),
+                order_type=VALUES(order_type),
+                updated_at=VALUES(updated_at)
+        """,
+        (
+            trade_id,
+            str(order_id),
+            order.get('symbol'),
+            order.get('side'),
+            order_price,
+            float(order.get('amount') or 0.0),
+            status,
+            float(order.get('filled') or 0.0),
+            float(order.get('remaining') or 0.0),
+            avg_price,
+            order_type,
+            now,
+            now
+        ))
+
+    conn.commit()
+    conn.close()
+
+
+def get_trade_orders(trade_id):
+    """Fetch stored ladder orders for a trade."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, order_id, symbol, side, price, amount, status,
+               filled_amount, remaining, avg_price, order_type
+          FROM trade_orders
+         WHERE trade_id = %s
+    """, (trade_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    orders = []
+    for row in rows:
+        (row_id, order_id, symbol_value, side, price, amount, status,
+         filled_amount, remaining, avg_price, order_type) = row
+        orders.append({
+            'db_id': row_id,
+            'order_id': order_id,
+            'symbol': symbol_value,
+            'side': side,
+            'price': float(price) if price is not None else None,
+            'amount': float(amount) if amount is not None else 0.0,
+            'status': status,
+            'filled_amount': float(filled_amount) if filled_amount is not None else 0.0,
+            'remaining': float(remaining) if remaining is not None else 0.0,
+            'avg_price': float(avg_price) if avg_price is not None else None,
+            'order_type': order_type
+        })
+    return orders
+
+
+def refresh_trade_fill(trade_id):
+    """Recompute aggregate fills for a trade and persist them."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT
+            COALESCE(SUM(filled_amount), 0),
+            COALESCE(SUM(filled_amount * COALESCE(avg_price, price)), 0)
+          FROM trade_orders
+         WHERE trade_id = %s
+    """, (trade_id,))
+    total_filled, notional = cursor.fetchone()
+
+    avg_entry = None
+    if total_filled and total_filled > 0:
+        avg_entry = notional / total_filled if notional else 0
+
+    cursor.execute("""
+        UPDATE trades
+           SET filled_amount = %s,
+               filled_notional = %s,
+               avg_entry_price = %s
+         WHERE id = %s
+    """, (float(total_filled or 0.0), float(notional or 0.0), avg_entry, trade_id))
+    conn.commit()
+    conn.close()
+
+    return float(total_filled or 0.0), (float(avg_entry) if avg_entry is not None else None)
+
+
+def sync_trade_orders_with_exchange(trade_id, symbol_code):
+    """Poll exchange for ladder order updates."""
+    orders = get_trade_orders(trade_id)
+    if not orders:
+        return 0.0, None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    any_updates = False
+
+    for order in orders:
+        if order['status'] in ('closed', 'canceled'):
+            continue
+        try:
+            remote = exchange.fetch_order(order['order_id'], symbol_code)
+        except Exception as e:
+            print(f"Failed to sync order {order['order_id']}: {e}")
+            continue
+
+        any_updates = True
+        remote_price = remote.get('price')
+        remote_price = float(remote_price) if remote_price is not None else None
+        remote_avg = remote.get('average')
+        remote_avg = float(remote_avg) if remote_avg is not None else None
+        remote_amount = float(remote.get('amount') or 0.0)
+        remote_filled = float(remote.get('filled') or 0.0)
+        remote_remaining = float(remote.get('remaining') or 0.0)
+        cursor.execute("""
+            UPDATE trade_orders
+               SET status=%s,
+                   filled_amount=%s,
+                   remaining=%s,
+                   avg_price=%s,
+                   price=%s,
+                   amount=%s,
+                   updated_at=%s
+             WHERE id=%s
+        """, (
+            remote.get('status'),
+            remote_filled,
+            remote_remaining,
+            remote_avg,
+            remote_price,
+            remote_amount,
+            now,
+            order['db_id']
+        ))
+
+    if any_updates:
+        conn.commit()
+    conn.close()
+
+    return refresh_trade_fill(trade_id)
+
+
+def cancel_trade_orders(trade_id, symbol_code):
+    """Cancel any outstanding child orders on the exchange."""
+    orders = get_trade_orders(trade_id)
+    for order in orders:
+        if order['status'] in ('closed', 'canceled'):
+            continue
+        try:
+            exchange.cancel_order(order['order_id'], symbol_code)
+        except Exception as e:
+            print(f"Failed to cancel order {order['order_id']}: {e}")
+
+
+def cancel_protective_orders(trade):
+    """Cancel associated stop-loss and take-profit orders."""
+    for oid in [trade.get('sl_order_id'), trade.get('tp_order_id')]:
+        if not oid:
+            continue
+        try:
+            exchange.cancel_order(oid, symbol)
+        except Exception as e:
+            print(f"Failed to cancel protective order {oid}: {e}")
+
+
+def _extract_stop_price(order_info):
+    if not order_info:
+        return None
+    info = order_info.get('info', {}) if isinstance(order_info, dict) else {}
+    for key in ('stopPrice', 'triggerPrice', 'price'):
+        value = None
+        if isinstance(order_info, dict):
+            value = order_info.get(key)
+        if value is None and isinstance(info, dict):
+            value = info.get(key)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def ensure_protective_orders(trade):
+    """Ensure SL/TP orders reflect the latest fills and averages."""
+    filled_amount = float(trade.get('filled_amount') or 0.0)
+    avg_entry = trade.get('avg_entry_price')
+    if filled_amount <= 0 or avg_entry in (None, 0):
+        return trade
+
+    risk_percent = trade.get('risk_percent') or 0.0
+    reward_percent = trade.get('reward_percent') or 0.0
+    action = trade.get('action')
+
+    if not risk_percent:
+        stop_loss = trade.get('stop_loss')
+        if stop_loss:
+            if action == 'long':
+                risk_percent = abs((avg_entry - stop_loss) / avg_entry) * 100
+            else:
+                risk_percent = abs((stop_loss - avg_entry) / avg_entry) * 100
+    if not reward_percent:
+        take_profit = trade.get('take_profit')
+        if take_profit:
+            if action == 'long':
+                reward_percent = abs((take_profit - avg_entry) / avg_entry) * 100
+            else:
+                reward_percent = abs((avg_entry - take_profit) / avg_entry) * 100
+
+    if action == 'long':
+        sl_price = round(avg_entry * (1 - (risk_percent / 100.0)), 2) if risk_percent else trade.get('stop_loss')
+        tp_price = round(avg_entry * (1 + (reward_percent / 100.0)), 2) if reward_percent else trade.get('take_profit')
+        exit_side = 'sell'
+    else:
+        sl_price = round(avg_entry * (1 + (risk_percent / 100.0)), 2) if risk_percent else trade.get('stop_loss')
+        tp_price = round(avg_entry * (1 - (reward_percent / 100.0)), 2) if reward_percent else trade.get('take_profit')
+        exit_side = 'buy'
+
+    sl_price = float(sl_price) if sl_price is not None else None
+    tp_price = float(tp_price) if tp_price is not None else None
+
+    sl_order_id = trade.get('sl_order_id')
+    tp_order_id = trade.get('tp_order_id')
+
+    def manage_order(existing_id, target_price, order_type):
+        if target_price is None:
+            if existing_id:
+                try:
+                    exchange.cancel_order(existing_id, symbol)
+                except Exception as exc:
+                    print(f"Failed to cancel {order_type} order {existing_id}: {exc}")
+            return None
+
+        existing_order = None
+        if existing_id:
+            try:
+                existing_order = exchange.fetch_order(existing_id, symbol)
+            except Exception as exc:
+                print(f"Failed to fetch existing {order_type} order {existing_id}: {exc}")
+                existing_order = None
+
+        needs_update = True
+        if existing_order:
+            current_price = _extract_stop_price(existing_order)
+            current_amount = float(existing_order.get('amount') or 0.0)
+            if (current_price is not None and abs(current_price - target_price) < 1e-6
+                    and abs(current_amount - filled_amount) < 1e-6
+                    and existing_order.get('status') not in ('canceled', 'closed')):
+                needs_update = False
+
+        if not needs_update:
+            return existing_id
+
+        if existing_id:
+            try:
+                exchange.cancel_order(existing_id, symbol)
+            except Exception as exc:
+                print(f"Failed to cancel {order_type} order {existing_id}: {exc}")
+
+        params = {'stopPrice': target_price, 'reduceOnly': True}
+        try:
+            new_order = exchange.create_order(symbol, order_type, exit_side, filled_amount, None, params)
+            return new_order.get('id')
+        except Exception as exc:
+            print(f"Failed to place {order_type} order: {exc}")
+            return existing_id
+
+    new_sl_id = manage_order(sl_order_id, sl_price, 'STOP_MARKET')
+    new_tp_id = manage_order(tp_order_id, tp_price, 'TAKE_PROFIT_MARKET')
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE trades
+           SET stop_loss=%s,
+               take_profit=%s,
+               risk_percent=%s,
+               reward_percent=%s,
+               sl_order_id=%s,
+               tp_order_id=%s
+         WHERE id=%s
+    """, (
+        sl_price,
+        tp_price,
+        float(risk_percent or 0.0),
+        float(reward_percent or 0.0),
+        new_sl_id,
+        new_tp_id,
+        trade['id']
     ))
     conn.commit()
     conn.close()
-    print(f"Trade saved with ID: {cursor.lastrowid}")
-    return cursor.lastrowid
+
+    trade['stop_loss'] = sl_price
+    trade['take_profit'] = tp_price
+    trade['risk_percent'] = risk_percent
+    trade['reward_percent'] = reward_percent
+    trade['sl_order_id'] = new_sl_id
+    trade['tp_order_id'] = new_tp_id
+    return trade
 
 
 def close_trade(trade_id, close_price, result):
+    close_price = float(close_price)
+
+    # Final sync before closing
+    try:
+        sync_trade_orders_with_exchange(trade_id, symbol)
+    except Exception as e:
+        print(f"Failed to sync orders before closing trade {trade_id}: {e}")
+
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT timestamp, action, entry_price, amount FROM trades WHERE id = %s", (trade_id,))
+    cursor.execute("""
+        SELECT timestamp, action, avg_entry_price, filled_amount,
+               risk_percent, reward_percent, sl_order_id, tp_order_id
+          FROM trades WHERE id = %s
+    """, (trade_id,))
     row = cursor.fetchone()
     if not row:
         print(f"Trade ID {trade_id} not found.")
         conn.close()
         return
-    open_ts, action, entry_price, amount = row
+
+    open_ts, action, avg_entry_price, filled_amount, risk_pct, reward_pct, sl_order_id, tp_order_id = row
     if isinstance(open_ts, datetime):
         open_time = open_ts
     else:
         open_time = datetime.strptime(open_ts, '%Y-%m-%d %H:%M:%S')
-    close_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    duration = str(datetime.now() - open_time)
-    if action == 'long':
+
+    trade_snapshot = {
+        'id': trade_id,
+        'action': action,
+        'sl_order_id': sl_order_id,
+        'tp_order_id': tp_order_id
+    }
+    cancel_protective_orders(trade_snapshot)
+    cancel_trade_orders(trade_id, symbol)
+
+    amount = float(filled_amount or 0.0)
+    entry_price = float(avg_entry_price or 0.0)
+    close_ts_dt = datetime.now()
+    close_ts = close_ts_dt.strftime('%Y-%m-%d %H:%M:%S')
+    duration = str(close_ts_dt - open_time)
+
+    if amount <= 0 or entry_price <= 0:
+        pnl = 0.0
+        pnl_pct = 0.0
+    elif action == 'long':
         pnl = (close_price - entry_price) * amount
         pnl_pct = ((close_price / entry_price) - 1) * 100
     else:
         pnl = (entry_price - close_price) * amount
         pnl_pct = ((entry_price / close_price) - 1) * 100
+
     cursor.execute("""
         INSERT INTO trade_results
           (trade_id, close_timestamp, close_price, pnl, pnl_percentage, duration, result)
         VALUES (%s,%s,%s,%s,%s,%s,%s)
     """, (trade_id, close_ts, close_price, pnl, pnl_pct, duration, result))
-    cursor.execute("UPDATE trades SET status='closed' WHERE id=%s", (trade_id,))
+
+    cursor.execute("""
+        UPDATE trades
+           SET status='closed',
+               sl_order_id=NULL,
+               tp_order_id=NULL
+         WHERE id=%s
+    """, (trade_id,))
     conn.commit()
     conn.close()
     print(f"Trade {trade_id} closed: PnL=${pnl:.2f} ({pnl_pct:.2f}%)")
@@ -253,7 +678,9 @@ def get_active_trade_info():
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, action, entry_price, amount, order_size, leverage,
-               stop_loss, take_profit, timestamp, entry_plan
+               stop_loss, take_profit, timestamp, entry_plan,
+               filled_amount, avg_entry_price, filled_notional,
+               risk_percent, reward_percent, sl_order_id, tp_order_id
           FROM trades
          WHERE status = 'open'
       ORDER BY id DESC
@@ -263,7 +690,9 @@ def get_active_trade_info():
     conn.close()
     if not row:
         return None
-    trade_id, action, entry_price, amount, order_size, leverage, sl, tp, ts, plan_raw = row
+    (trade_id, action, entry_price, amount, order_size, leverage,
+     sl, tp, ts, plan_raw, filled_amount, avg_entry_price, filled_notional,
+     risk_percent, reward_percent, sl_order_id, tp_order_id) = row
     if isinstance(ts, datetime):
         open_time = ts
     else:
@@ -283,7 +712,14 @@ def get_active_trade_info():
         'take_profit': tp,
         'timestamp': ts,
         'duration': datetime.now() - open_time,
-        'entry_plan': entry_plan
+        'entry_plan': entry_plan,
+        'filled_amount': filled_amount,
+        'avg_entry_price': avg_entry_price,
+        'filled_notional': filled_notional,
+        'risk_percent': risk_percent,
+        'reward_percent': reward_percent,
+        'sl_order_id': sl_order_id,
+        'tp_order_id': tp_order_id
     }
 
 # 새로 추가한 함수: 최근 거래 내역 및 결과 가져오기
@@ -622,23 +1058,30 @@ def plan_ladder_entries(base_price, direction, volatility, steps=7):
     return plan
 
 
-def execute_entry_plan(symbol, direction, total_amount, entry_plan):
+def execute_entry_plan(symbol, direction, total_notional, entry_plan):
     """Place ladder orders based on the generated entry plan."""
-    if not entry_plan or total_amount <= 0:
-        return []
+    if not entry_plan or total_notional <= 0:
+        return [], 0.0, 0.0
 
     side = 'buy' if direction == 'long' else 'sell'
     placed_orders = []
+    committed_notional = 0.0
     cumulative_amount = 0.0
 
     for idx, leg in enumerate(entry_plan, start=1):
         target_price = leg['target_price']
         leg_fraction = leg['fraction']
-        leg_amount = round(total_amount * leg_fraction, 3)
+        allocated_notional = round(total_notional * leg_fraction, 2)
+        remaining_notional = round(max(total_notional - committed_notional, 0.0), 2)
         if idx == len(entry_plan):
-            leg_amount = round(max(total_amount - cumulative_amount, 0.0), 3)
-        cumulative_amount += leg_amount
+            leg_notional = remaining_notional
+        else:
+            leg_notional = min(allocated_notional, remaining_notional)
 
+        if leg_notional <= 0 or target_price <= 0:
+            continue
+
+        leg_amount = round(leg_notional / target_price, 3)
         if leg_amount <= 0:
             continue
 
@@ -648,6 +1091,8 @@ def execute_entry_plan(symbol, direction, total_amount, entry_plan):
             else:
                 order = exchange.create_limit_sell_order(symbol, leg_amount, target_price)
             placed_orders.append(order)
+            committed_notional += leg_notional
+            cumulative_amount += leg_amount
             print(
                 f"Placed ladder order {idx}/{len(entry_plan)}: {side.upper()} {leg_amount} BTC @ ${target_price:.2f} "
                 f"(offset {leg['offset_pct']:.2f}%)"
@@ -655,7 +1100,10 @@ def execute_entry_plan(symbol, direction, total_amount, entry_plan):
         except Exception as e:
             print(f"Failed to place ladder order {idx}: {e}")
 
-    return placed_orders
+        if committed_notional >= total_notional:
+            break
+
+    return placed_orders, cumulative_amount, committed_notional
 
 def get_dataframe_with_indicators(ohlcv_data, timeframe, limit=100):
     """
@@ -997,31 +1445,61 @@ def check_and_close_active_trades():
     if sync_closed_by_exchange():
         return True
 
-    # 1) 기존 로직: DB 기준 SL/TP 체크
     active_trade = get_active_trade_info()
     if not active_trade:
         return False
 
+    trade_id = active_trade['id']
+
+    try:
+        filled_amount, avg_entry = sync_trade_orders_with_exchange(trade_id, symbol)
+    except Exception as e:
+        print(f"Failed to sync ladder orders for trade {trade_id}: {e}")
+        filled_amount = active_trade.get('filled_amount') or 0.0
+        avg_entry = active_trade.get('avg_entry_price')
+
+    refreshed_trade = get_active_trade_info()
+    if refreshed_trade:
+        active_trade = refreshed_trade
+
+    filled_amount = float(active_trade.get('filled_amount') or filled_amount or 0.0)
+    avg_entry = active_trade.get('avg_entry_price') or avg_entry
+
+    if filled_amount <= 0:
+        # 아직 체결이 없으면 보호 주문을 걸지 않고 대기
+        return False
+
+    active_trade['filled_amount'] = filled_amount
+    active_trade['avg_entry_price'] = avg_entry
+    active_trade = ensure_protective_orders(active_trade)
+
     ticker = exchange.fetch_ticker(symbol)
     current_price = ticker['last']
-    should_close = False
-    close_reason = ""
+
+    sl_price = active_trade.get('stop_loss')
+    tp_price = active_trade.get('take_profit')
+
+    if sl_price is None or tp_price is None:
+        return False
 
     if active_trade['action'] == 'long':
-        if current_price <= active_trade['stop_loss']:
-            should_close, close_reason = True, "stop_loss"
-        elif current_price >= active_trade['take_profit']:
-            should_close, close_reason = True, "take_profit"
+        if current_price <= sl_price:
+            print(f"Closing trade #{trade_id} at {current_price} due to stop_loss")
+            close_trade(trade_id, current_price, "stop_loss")
+            return True
+        if current_price >= tp_price:
+            print(f"Closing trade #{trade_id} at {current_price} due to take_profit")
+            close_trade(trade_id, current_price, "take_profit")
+            return True
     else:
-        if current_price >= active_trade['stop_loss']:
-            should_close, close_reason = True, "stop_loss"
-        elif current_price <= active_trade['take_profit']:
-            should_close, close_reason = True, "take_profit"
-
-    if should_close:
-        print(f"Closing trade #{active_trade['id']} at {current_price} due to {close_reason}")
-        close_trade(active_trade['id'], current_price, close_reason)
-        return True
+        if current_price >= sl_price:
+            print(f"Closing trade #{trade_id} at {current_price} due to stop_loss")
+            close_trade(trade_id, current_price, "stop_loss")
+            return True
+        if current_price <= tp_price:
+            print(f"Closing trade #{trade_id} at {current_price} due to take_profit")
+            close_trade(trade_id, current_price, "take_profit")
+            return True
 
     return False
 
@@ -1090,12 +1568,14 @@ while True:
                 print(f"Trade ID: {active_trade['id']}, Entry: ${active_trade['entry_price']:.2f}, Duration: {active_trade['duration']}")
                 
                 # 현재 PnL 계산
+                basis_price = active_trade.get('avg_entry_price') or active_trade['entry_price']
+                basis_amount = active_trade.get('filled_amount') or active_trade['amount']
                 if active_trade['action'] == 'long':
-                    current_pnl = (current_price - active_trade['entry_price']) * active_trade['amount']
-                    pnl_percentage = ((current_price / active_trade['entry_price']) - 1) * 100
+                    current_pnl = (current_price - basis_price) * basis_amount
+                    pnl_percentage = ((current_price / basis_price) - 1) * 100 if basis_price else 0
                 else:  # short
-                    current_pnl = (active_trade['entry_price'] - current_price) * active_trade['amount']
-                    pnl_percentage = ((active_trade['entry_price'] / current_price) - 1) * 100
+                    current_pnl = (basis_price - current_price) * basis_amount
+                    pnl_percentage = ((basis_price / current_price) - 1) * 100 if current_price else 0
                 
                 print(f"Current P&L: ${current_pnl:.2f} ({pnl_percentage:.2f}%)")
                 
@@ -1533,15 +2013,15 @@ while True:
             # 최소 BASE_ORDER_SIZE, 최대 leveraged_capital
             final_order_size = max(BASE_ORDER_SIZE, min(leveraged_capital, account_balance * MAX_ACCOUNT_RISK * leverage_level))
             
-            # 주문 수량 계산 (USDT -> BTC)
-            amount = math.ceil((final_order_size / current_price) * 1000) / 1000
-            print(f"Order Amount: {amount} BTC (${final_order_size:.2f} USDT)")
+            print(f"Order Notional Target: ${final_order_size:.2f} USDT")
 
-            # 포지션 진입 및 SL/TP 주문
+            # 포지션 진입 준비
             last_processed_candle = latest_candle_time
 
             if final_action == "long":
-                ladder_orders = execute_entry_plan(symbol, "long", amount, entry_plan)
+                ladder_orders, ladder_amount, committed_notional = execute_entry_plan(
+                    symbol, "long", final_order_size, entry_plan
+                )
                 if not ladder_orders:
                     print("Unable to place ladder orders for LONG setup. Skipping trade.")
                     time.sleep(30)
@@ -1551,30 +2031,29 @@ while True:
                 sl_price = round(entry_price * (1 - risk_percent/100), 2)
                 tp_price = round(entry_price * (1 + reward_percent/100), 2)
 
-                # SL/TP 주문 생성
-                exchange.create_order(symbol, 'STOP_MARKET', 'sell', amount, None, {'stopPrice': sl_price})
-                exchange.create_order(symbol, 'TAKE_PROFIT_MARKET', 'sell', amount, None, {'stopPrice': tp_price})
-
                 # 트레이딩 내역 데이터베이스에 저장
                 active_trade_id = save_trade(
                     action="long",
                     entry_price=entry_price,
-                    amount=amount,
-                    order_size=final_order_size,
+                    amount=ladder_amount,
+                    order_size=committed_notional,
                     leverage=leverage_level,
                     sl_price=sl_price,
                     tp_price=tp_price,
                     kelly_fraction=kelly_fraction,
                     win_probability=win_probability,
                     volatility=market_volatility,
-                    entry_plan=entry_plan
+                    risk_percent=risk_percent,
+                    reward_percent=reward_percent,
+                    entry_plan=entry_plan,
+                    ladder_orders=ladder_orders
                 )
 
                 print(f"\n=== LONG Ladder Prepared ===")
                 print(f"Reference Price: ${entry_price:,.2f}")
                 print(f"Stop Loss: ${sl_price:,.2f} (-{risk_percent:.2f}%)")
                 print(f"Take Profit: ${tp_price:,.2f} (+{reward_percent:.2f}%)")
-                print(f"Total Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
+                print(f"Total Position Size: {ladder_amount} BTC (${committed_notional:.2f} USDT)")
                 print(f"Leverage: {leverage_level}x")
                 print(f"Kelly Fraction: {kelly_fraction:.2%}")
                 print(f"Win Probability: {win_probability:.2%}")
@@ -1583,7 +2062,9 @@ while True:
                 print("==============================")
 
             elif final_action == "short":
-                ladder_orders = execute_entry_plan(symbol, "short", amount, entry_plan)
+                ladder_orders, ladder_amount, committed_notional = execute_entry_plan(
+                    symbol, "short", final_order_size, entry_plan
+                )
                 if not ladder_orders:
                     print("Unable to place ladder orders for SHORT setup. Skipping trade.")
                     time.sleep(30)
@@ -1593,30 +2074,29 @@ while True:
                 sl_price = round(entry_price * (1 + risk_percent/100), 2)
                 tp_price = round(entry_price * (1 - reward_percent/100), 2)
 
-                # SL/TP 주문 생성
-                exchange.create_order(symbol, 'STOP_MARKET', 'buy', amount, None, {'stopPrice': sl_price})
-                exchange.create_order(symbol, 'TAKE_PROFIT_MARKET', 'buy', amount, None, {'stopPrice': tp_price})
-
                 # 트레이딩 내역 데이터베이스에 저장
                 active_trade_id = save_trade(
                     action="short",
                     entry_price=entry_price,
-                    amount=amount,
-                    order_size=final_order_size,
+                    amount=ladder_amount,
+                    order_size=committed_notional,
                     leverage=leverage_level,
                     sl_price=sl_price,
                     tp_price=tp_price,
                     kelly_fraction=kelly_fraction,
                     win_probability=win_probability,
                     volatility=market_volatility,
-                    entry_plan=entry_plan
+                    risk_percent=risk_percent,
+                    reward_percent=reward_percent,
+                    entry_plan=entry_plan,
+                    ladder_orders=ladder_orders
                 )
 
                 print(f"\n=== SHORT Ladder Prepared ===")
                 print(f"Reference Price: ${entry_price:,.2f}")
                 print(f"Stop Loss: ${sl_price:,.2f} (+{risk_percent:.2f}%)")
                 print(f"Take Profit: ${tp_price:,.2f} (-{reward_percent:.2f}%)")
-                print(f"Total Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
+                print(f"Total Position Size: {ladder_amount} BTC (${committed_notional:.2f} USDT)")
                 print(f"Leverage: {leverage_level}x")
                 print(f"Kelly Fraction: {kelly_fraction:.2%}")
                 print(f"Win Probability: {win_probability:.2%}")
