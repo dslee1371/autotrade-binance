@@ -438,34 +438,24 @@ print("=========================================================\n")
 setup_database()
 
 def calculate_kelly_criterion(win_probability, win_loss_ratio):
+    """켈리 크리테리온을 계산한다.
+
+    승률이 0.5 미만이면 음의 기대값으로 간주하여 거래를 건너뛴다. 승률과
+    손익비는 그대로 사용하며, 켈리 수식으로 계산한 뒤 절반만 사용하고
+    계정 최대 리스크 한도를 적용한다.
     """
-    켈리 크리테리온을 계산하는 함수
-    
-    Parameters:
-    - win_probability: 승리 확률 (0~1 사이의 값)
-    - win_loss_ratio: 승리 시 이익과 손실 시 손실의 비율 (승리 시 이익 / 손실 시 손실)
-    
-    Returns:
-    - 최적의 배팅 비율 (0~1 사이의 값)
-    """
-    # 승률이 0.5 미만이면 short 포지션으로 변경
-    actual_win_prob = win_probability if win_probability >= 0.5 else 1 - win_probability
-    
-    # 켈리 공식: f* = (p*b - q) / b = (p*b - (1-p)) / b
-    # p: 승리 확률, q: 패배 확률 (1-p), b: 승리/패배 비율
-    kelly_fraction = (actual_win_prob * win_loss_ratio - (1 - actual_win_prob)) / win_loss_ratio
-    
-    # 켈리 값이 음수일 경우 배팅하지 않음 (0 반환)
+
+    if win_probability <= 0.5 or win_loss_ratio <= 0:
+        return 0
+
+    kelly_fraction = (win_probability * win_loss_ratio - (1 - win_probability)) / win_loss_ratio
+
     if kelly_fraction <= 0:
         return 0
-    
-    # Full Kelly는 변동성이 높으므로 Half Kelly 사용 (보수적 접근)
+
     half_kelly = kelly_fraction * 0.5
-    
-    # 계정 최대 리스크로 제한
-    limited_kelly = min(half_kelly, MAX_ACCOUNT_RISK)
-    
-    return limited_kelly
+
+    return min(half_kelly, MAX_ACCOUNT_RISK)
 
 def get_account_balance():
     """계정 잔액을 가져오는 함수"""
@@ -678,98 +668,87 @@ def get_trend_status_string(analysis):
     
     status += f"Trend Analysis: Short-term={analysis['short_trend']}, "
     status += f"Medium-term={analysis['medium_trend']}, Long-term={analysis['long_trend']}"
-    
+
     return status
 
-def parse_ai_response(response_text):
-    """
-    Enhanced AI response parser to extract action and confidence probability
-    from various response formats.
-    
-    Returns:
-    - (action, probability) tuple where action is 'long', 'short', or 'none'
-      and probability is a float between 0 and 1
-    """
-    try:
-        # Log the raw response for debugging
-        print(f"Raw AI response to parse: {response_text}")
-        
-        # Clean the text
-        cleaned_text = response_text.strip().lower()
-        
-        # Initialize default values
+
+def generate_rule_based_signal(short_df, medium_df):
+    """기술적 지표를 활용한 규칙 기반 진입 시그널을 생성한다."""
+
+    latest_short = short_df.iloc[-1]
+    latest_medium = medium_df.iloc[-1]
+
+    signal_components = []
+
+    signal_components.append(1 if latest_short['close'] > latest_short['MA20'] else -1)
+    signal_components.append(1 if latest_short['MA5'] > latest_short['MA20'] else -1)
+    signal_components.append(1 if latest_medium['close'] > latest_medium['MA50'] else -1)
+    signal_components.append(1 if latest_short['MACD'] > latest_short['MACD_signal'] else -1)
+
+    rsi = latest_short['RSI']
+    if rsi >= 60:
+        signal_components.append(1)
+    elif rsi <= 40:
+        signal_components.append(-1)
+
+    score = sum(signal_components)
+    positives = sum(1 for s in signal_components if s > 0)
+    negatives = sum(1 for s in signal_components if s < 0)
+    total_votes = positives + negatives
+
+    if total_votes == 0:
+        return 'none', 0.0
+
+    if score >= 2:
+        action = 'long'
+    elif score <= -2:
+        action = 'short'
+    else:
         action = 'none'
-        probability = 0.0
-        
-        # Try multiple regex patterns to extract information
+
+    if action == 'none':
+        return action, 0.0
+
+    conviction = max(positives, negatives) / total_votes
+    probability = 0.55 + min(0.35, conviction * 0.3)
+
+    return action, min(probability, 0.9)
+
+def parse_ai_response(response_text):
+    """지정된 포맷의 AI 응답에서 방향과 확률을 추출한다."""
+
+    if not response_text:
+        return 'none', 0.0
+
+    try:
         import re
-        
-        # Pattern 1: **direction: action** and **probability: value**
-        direction_match = re.search(r"\*\*direction:\s*(\w+)\*\*", cleaned_text)
-        probability_match = re.search(r"\*\*probability:\s*([\d.]+)\*\*", cleaned_text)
-        
-        if direction_match and probability_match:
-            action = direction_match.group(1).strip()
-            try:
-                probability = float(probability_match.group(1))
-            except ValueError:
-                print(f"Could not convert probability to float: {probability_match.group(1)}")
-                probability = 0.5
-                
-        # Pattern 2: action:probability format
-        elif ':' in cleaned_text:
-            # Find all instances of "long:X.XX" or "short:X.XX"
-            action_prob_matches = re.findall(r"(long|short):([\d.]+)", cleaned_text)
-            
-            if action_prob_matches:
-                # Use the last instance if multiple found
-                action, prob_str = action_prob_matches[-1]
-                try:
-                    probability = float(prob_str)
-                except ValueError:
-                    print(f"Could not convert probability to float: {prob_str}")
-                    probability = 0.5
-        
-        # Pattern 3: Look for the words "long" or "short" and assign default probability
+
+        cleaned_text = response_text.strip().lower()
+        print(f"Raw AI response to parse: {cleaned_text}")
+
+        direction_match = re.search(r"\*\*direction:\s*(long|short)\*\*", cleaned_text)
+        probability_match = re.search(r"\*\*probability:\s*((?:0?\.\d+)|(?:1\.0+))\*\*", cleaned_text)
+
+        if not direction_match or not probability_match:
+            inline_match = re.search(r"(long|short)\s*[:|-]\s*((?:0?\.\d+)|(?:1\.0+))", cleaned_text)
+            if inline_match:
+                direction_match, probability_match = inline_match, inline_match
+                action = inline_match.group(1)
+                probability = float(inline_match.group(2))
+            else:
+                print("AI response missing required direction/probability format. Skipping.")
+                return 'none', 0.0
         else:
-            long_matches = re.findall(r"\b(long)\b", cleaned_text)
-            short_matches = re.findall(r"\b(short)\b", cleaned_text)
-            
-            long_count = len(long_matches)
-            short_count = len(short_matches)
-            
-            if long_count > 0 and short_count > 0:
-                # If both appear, check which appears last
-                last_long_pos = cleaned_text.rfind('long')
-                last_short_pos = cleaned_text.rfind('short')
-                
-                if last_long_pos > last_short_pos:
-                    action = 'long'
-                else:
-                    action = 'short'
-                
-                probability = 0.6  # Default confidence when both are mentioned
-            elif long_count > 0:
-                action = 'long'
-                probability = 0.6
-            elif short_count > 0:
-                action = 'short'
-                probability = 0.6
-        
-        # Validate action
-        if action not in ['long', 'short', 'none']:
-            print(f"Invalid action: {action}. Defaulting to 'none'.")
-            action = 'none'
-            probability = 0.0
-            
-        # Validate probability range
-        if probability < 0 or probability > 1:
-            print(f"Invalid probability: {probability}. Should be between 0 and 1. Using 0.5.")
-            probability = 0.5 if action != 'none' else 0.0
-            
+            action = direction_match.group(1)
+            probability = float(probability_match.group(1))
+
+        if probability < 0.5 or probability > 1:
+            print(f"Probability {probability} outside allowed range. Skipping signal.")
+            return 'none', 0.0
+
         print(f"Parsed decision: {action.upper()} with {probability:.2%} confidence")
         return action, probability
-        
+
     except Exception as e:
         print(f"Error parsing AI response: {e}")
         return 'none', 0.0
@@ -943,6 +922,7 @@ def check_and_close_active_trades():
 
 # 활성 트레이드 ID 추적 변수
 active_trade_id = None
+last_processed_candle = None
 
 while True:
     try:
@@ -984,14 +964,16 @@ while True:
         print(f"Market Volatility: {market_volatility:.2f}%")
         
         # 변동성에 따른 SL/TP 조정
-        sl_tp_percentage = 0.5  # 기본 0.5%
-        if market_volatility > 2.0:  # 변동성이 높을 경우
-            sl_tp_percentage = 1.5  # SL/TP 범위 확장
-            print(f"High volatility detected! Adjusting SL/TP to ±{sl_tp_percentage}%")
-        elif market_volatility > 3.0:  # 매우 높은 변동성
-            sl_tp_percentage = 2.0  # SL/TP 범위 더 확장
-            print(f"Very high volatility detected! Adjusting SL/TP to ±{sl_tp_percentage}%")
-        
+        risk_percent = 1.0
+        if market_volatility >= 3.0:
+            risk_percent = 2.5
+            print(f"Very high volatility detected! Adjusting SL to {risk_percent:.1f}%")
+        elif market_volatility >= 2.0:
+            risk_percent = 1.5
+            print(f"High volatility detected! Adjusting SL to {risk_percent:.1f}%")
+
+        reward_percent = risk_percent * 1.5
+
         if current_side:
             print(f"Current Position: {current_side.upper()} {amount} BTC")
             
@@ -1042,6 +1024,13 @@ while True:
             # 단기(15분봉) 데이터 수집
             ohlcv_short = exchange.fetch_ohlcv("BTC/USDT", timeframe="15m", limit=150)  # 15분봉 (약 37시간 분량)
             df_short_full = get_dataframe_with_indicators(ohlcv_short, '15m')
+            latest_candle_time = df_short_full['timestamp'].iloc[-1]
+
+            if last_processed_candle == latest_candle_time:
+                print("Waiting for current 15m candle to close before re-evaluating.")
+                time.sleep(30)
+                continue
+
             df_short = get_simplified_dataframe(df_short_full, 24)  # 최근 24개 캔들만 분석에 사용
             
             # 중기(1시간봉) 데이터 수집
@@ -1161,6 +1150,16 @@ while True:
                 if data['trades'] > 0:
                     volatility_summary += f"{data['range']}%: {data['win_rate']:.2%} ({data['wins']}/{data['trades']}), "
             
+
+            rule_action, rule_probability = generate_rule_based_signal(df_short_full, df_medium_full)
+
+            if rule_action == 'none':
+                print("Rule-based strategy found no actionable edge. Waiting for the next candle.")
+                last_processed_candle = latest_candle_time
+                time.sleep(30)
+                continue
+
+            print(f"Rule-based signal: {rule_action.upper()} with {rule_probability:.2%} confidence")
 
             # AI 분석 요청 - 추세선 데이터와 거래 내역 포함
             payload = {
@@ -1315,26 +1314,41 @@ while True:
 
             print(f"AI Analysis: {ai_response}")
             
-            # AI 응답 파싱
-            action, win_probability = parse_ai_response(ai_response)
-            
-            if action == 'none' or win_probability < 0.5:
-                print("No clear trading signal or confidence too low. Skipping trade.")
+            ai_action, ai_probability = parse_ai_response(ai_response)
+
+            final_action = rule_action
+            final_probability = rule_probability
+
+            if ai_action == 'none':
+                print("AI confirmation unavailable. Proceeding with rule-based signal only.")
+            else:
+                if ai_action != rule_action:
+                    print("AI disagrees with the rule-based signal. Skipping this setup.")
+                    last_processed_candle = latest_candle_time
+                    time.sleep(30)
+                    continue
+                final_probability = min(1.0, (rule_probability + ai_probability) / 2)
+
+            win_probability = final_probability
+
+            if win_probability < 0.5 or final_action == 'none':
+                print("Combined signal lacks edge. Skipping trade.")
+                last_processed_candle = latest_candle_time
                 time.sleep(30)
                 continue
-                
-            print(f"Trading Signal: {action.upper()} with {win_probability:.2%} confidence")
+
+            print(f"Trading Signal: {final_action.upper()} with {win_probability:.2%} confidence")
             
             # 승리/손실 비율 계산 (Risk-Reward Ratio)
-            # SL/TP 비율을 사용하여 계산: TP/SL
-            win_loss_ratio = 1.0  # 기본값 (symmetric 1:1)
-            
+            win_loss_ratio = reward_percent / risk_percent if risk_percent else 0
+
             # Kelly Criterion 계산
             kelly_fraction = calculate_kelly_criterion(win_probability, win_loss_ratio)
             print(f"Kelly Criterion Fraction: {kelly_fraction:.4f} ({kelly_fraction:.2%})")
             
             if kelly_fraction <= 0:
                 print("Kelly criterion suggests not to trade. Skipping this opportunity.")
+                last_processed_candle = latest_candle_time
                 time.sleep(30)
                 continue
                 
@@ -1358,11 +1372,13 @@ while True:
             print(f"Order Amount: {amount} BTC (${final_order_size:.2f} USDT)")
 
             # 포지션 진입 및 SL/TP 주문
-            if action == "long":
+            last_processed_candle = latest_candle_time
+
+            if final_action == "long":
                 order = exchange.create_market_buy_order(symbol, amount)
                 entry_price = current_price
-                sl_price = round(entry_price * (1 - sl_tp_percentage/100), 2)
-                tp_price = round(entry_price * (1 + sl_tp_percentage/100), 2)
+                sl_price = round(entry_price * (1 - risk_percent/100), 2)
+                tp_price = round(entry_price * (1 + reward_percent/100), 2)
                 
                 # SL/TP 주문 생성
                 exchange.create_order(symbol, 'STOP_MARKET', 'sell', amount, None, {'stopPrice': sl_price})
@@ -1384,8 +1400,8 @@ while True:
                 
                 print(f"\n=== LONG Position Opened ===")
                 print(f"Entry: ${entry_price:,.2f}")
-                print(f"Stop Loss: ${sl_price:,.2f} (-{sl_tp_percentage}%)")
-                print(f"Take Profit: ${tp_price:,.2f} (+{sl_tp_percentage}%)")
+                print(f"Stop Loss: ${sl_price:,.2f} (-{risk_percent:.2f}%)")
+                print(f"Take Profit: ${tp_price:,.2f} (+{reward_percent:.2f}%)")
                 print(f"Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
                 print(f"Leverage: {leverage_level}x")
                 print(f"Kelly Fraction: {kelly_fraction:.2%}")
@@ -1393,11 +1409,11 @@ while True:
                 print(f"Trade ID: {active_trade_id}")
                 print("===========================")
 
-            elif action == "short":
+            elif final_action == "short":
                 order = exchange.create_market_sell_order(symbol, amount)
                 entry_price = current_price
-                sl_price = round(entry_price * (1 + sl_tp_percentage/100), 2)
-                tp_price = round(entry_price * (1 - sl_tp_percentage/100), 2)
+                sl_price = round(entry_price * (1 + risk_percent/100), 2)
+                tp_price = round(entry_price * (1 - reward_percent/100), 2)
                 
                 # SL/TP 주문 생성
                 exchange.create_order(symbol, 'STOP_MARKET', 'buy', amount, None, {'stopPrice': sl_price})
@@ -1419,8 +1435,8 @@ while True:
                 
                 print(f"\n=== SHORT Position Opened ===")
                 print(f"Entry: ${entry_price:,.2f}")
-                print(f"Stop Loss: ${sl_price:,.2f} (+{sl_tp_percentage}%)")
-                print(f"Take Profit: ${tp_price:,.2f} (-{sl_tp_percentage}%)")
+                print(f"Stop Loss: ${sl_price:,.2f} (+{risk_percent:.2f}%)")
+                print(f"Take Profit: ${tp_price:,.2f} (-{reward_percent:.2f}%)")
                 print(f"Position Size: {amount} BTC (${final_order_size:.2f} USDT)")
                 print(f"Leverage: {leverage_level}x")
                 print(f"Kelly Fraction: {kelly_fraction:.2%}")
@@ -1428,7 +1444,7 @@ while True:
                 print(f"Trade ID: {active_trade_id}")
                 print("============================")
             else:
-                print("action이 'long' 또는 'short'가 아니므로 주문을 실행하지 않습니다.")
+                print("final_action이 'long' 또는 'short'가 아니므로 주문을 실행하지 않습니다.")
         
         time.sleep(30)  # 30초마다 체크
 
