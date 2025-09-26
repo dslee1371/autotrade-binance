@@ -1,4 +1,5 @@
 import ccxt
+import json
 import os
 import math
 import time
@@ -107,9 +108,24 @@ def setup_database():
         kelly_fraction   DOUBLE,
         win_probability  DOUBLE,
         volatility       DOUBLE,
-        status           VARCHAR(10) DEFAULT 'open'
+        status           VARCHAR(10) DEFAULT 'open',
+        entry_plan       TEXT
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
     """)
+
+    cursor.execute(
+        """
+        SELECT COUNT(*)
+          FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = %s
+           AND TABLE_NAME = 'trades'
+           AND COLUMN_NAME = 'entry_plan'
+        """,
+        (DB_CONFIG['database'],)
+    )
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("ALTER TABLE trades ADD COLUMN entry_plan TEXT")
+        conn.commit()
     # trade_results 테이블
     cursor.execute(f"""
     CREATE TABLE IF NOT EXISTS trade_results (
@@ -140,7 +156,8 @@ def setup_database():
     print("MySQL database setup complete.")
 
 def save_trade(action, entry_price, amount, order_size, leverage,
-               sl_price, tp_price, kelly_fraction, win_probability, volatility):
+               sl_price, tp_price, kelly_fraction, win_probability,
+               volatility, entry_plan=None):
     # NumPy 타입을 파이썬 기본 타입으로 변환
     entry_price     = float(entry_price)
     amount          = float(amount)
@@ -152,17 +169,21 @@ def save_trade(action, entry_price, amount, order_size, leverage,
     win_probability = float(win_probability)
     volatility      = float(volatility)
 
+    entry_plan_json = json.dumps(entry_plan) if entry_plan else None
+
     conn = get_connection()
     cursor = conn.cursor()
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     cursor.execute("""
         INSERT INTO trades
           (timestamp, action, entry_price, amount, order_size, leverage,
-           stop_loss, take_profit, kelly_fraction, win_probability, volatility)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+           stop_loss, take_profit, kelly_fraction, win_probability, volatility,
+           status, entry_plan)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         now, action, entry_price, amount, order_size, leverage,
-        sl_price, tp_price, kelly_fraction, win_probability, volatility
+        sl_price, tp_price, kelly_fraction, win_probability, volatility,
+        'open', entry_plan_json
     ))
     conn.commit()
     conn.close()
@@ -232,7 +253,7 @@ def get_active_trade_info():
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, action, entry_price, amount, order_size, leverage,
-               stop_loss, take_profit, timestamp
+               stop_loss, take_profit, timestamp, entry_plan
           FROM trades
          WHERE status = 'open'
       ORDER BY id DESC
@@ -242,11 +263,15 @@ def get_active_trade_info():
     conn.close()
     if not row:
         return None
-    trade_id, action, entry_price, amount, order_size, leverage, sl, tp, ts = row
+    trade_id, action, entry_price, amount, order_size, leverage, sl, tp, ts, plan_raw = row
     if isinstance(ts, datetime):
         open_time = ts
     else:
         open_time = datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
+    try:
+        entry_plan = json.loads(plan_raw) if plan_raw else None
+    except (TypeError, json.JSONDecodeError):
+        entry_plan = None
     return {
         'id': trade_id,
         'action': action,
@@ -257,7 +282,8 @@ def get_active_trade_info():
         'stop_loss': sl,
         'take_profit': tp,
         'timestamp': ts,
-        'duration': datetime.now() - open_time
+        'duration': datetime.now() - open_time,
+        'entry_plan': entry_plan
     }
 
 # 새로 추가한 함수: 최근 거래 내역 및 결과 가져오기
@@ -268,7 +294,8 @@ def get_recent_trade_history(limit=20):
     cursor.execute("""
         SELECT t.id, t.timestamp, t.action, t.entry_price,
                tr.close_price, tr.pnl, tr.pnl_percentage, tr.result,
-               t.win_probability, t.kelly_fraction, t.volatility, t.leverage
+               t.win_probability, t.kelly_fraction, t.volatility, t.leverage,
+               t.entry_plan
           FROM trades t
           JOIN trade_results tr ON t.id = tr.trade_id
          WHERE t.status = 'closed'
@@ -279,7 +306,11 @@ def get_recent_trade_history(limit=20):
     conn.close()
 
     history = []
-    for (tid, ts, act, ep, cp, pnl, pnl_pct, res, wp, kf, vol, lev) in rows:
+    for (tid, ts, act, ep, cp, pnl, pnl_pct, res, wp, kf, vol, lev, plan_raw) in rows:
+        try:
+            entry_plan = json.loads(plan_raw) if plan_raw else None
+        except (TypeError, json.JSONDecodeError):
+            entry_plan = None
         history.append({
             'id':              tid,
             'timestamp':       ts,
@@ -292,7 +323,8 @@ def get_recent_trade_history(limit=20):
             'win_probability': wp,
             'kelly_fraction':  kf,
             'volatility':      vol,
-            'leverage':        lev
+            'leverage':        lev,
+            'entry_plan':      entry_plan
         })
     return history
 
@@ -1534,7 +1566,8 @@ while True:
                     tp_price=tp_price,
                     kelly_fraction=kelly_fraction,
                     win_probability=win_probability,
-                    volatility=market_volatility
+                    volatility=market_volatility,
+                    entry_plan=entry_plan
                 )
 
                 print(f"\n=== LONG Ladder Prepared ===")
@@ -1575,7 +1608,8 @@ while True:
                     tp_price=tp_price,
                     kelly_fraction=kelly_fraction,
                     win_probability=win_probability,
-                    volatility=market_volatility
+                    volatility=market_volatility,
+                    entry_plan=entry_plan
                 )
 
                 print(f"\n=== SHORT Ladder Prepared ===")
