@@ -34,9 +34,7 @@ spec:
 """
     }
   }
-  parameters {
-        booleanParam(name: 'UPDATE_GITOPS', defaultValue: true, description: 'Update GitOps repository')
-  }
+
   environment {
     DOCKER_CONFIG = '/kaniko/.docker'
   }
